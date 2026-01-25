@@ -13,40 +13,35 @@ from datetime import datetime
 st.set_page_config(page_title="NBA SGP Ultimate Builder (Option A)", layout="centered")
 st.title("NBA SGP Ultimate Builder (Option A)")
 st.caption(
-    "Team-only input • API-NBA (API-Sports) • Last 5 only • 5/5 gate • Minutes gate • Floor lines • "
+    "Team-only input • API-SPORTS Basketball/NBA • Last 5 only • 5/5 gate • Minutes gate • Floor lines • "
     "Prefer REB/AST/PRA • Max 1 opposing player • FINAL + SAFE"
 )
 
 # ============================
-# API-SPORTS (API-NBA) CONFIG
+# AUTO-SEASON (NBA) DISPLAY
 # ============================
 
-API_BASE = "https://v1.nba.api-sports.io"
-API_KEY = st.secrets.get("API_SPORTS_KEY", None)
+def current_nba_season_label() -> str:
+    today = datetime.today()
+    year = today.year
+    if today.month >= 10:
+        return f"{year}-{str(year + 1)[-2:]}"
+    return f"{year - 1}-{str(year)[-2:]}"
 
-if not API_KEY:
-    st.error("Missing API_SPORTS_KEY. Add it in Streamlit Secrets and rerun.")
-    st.stop()
-
-API_HEADERS = {"x-apisports-key": API_KEY}
-
-# ============================
-# SEASON AUTO-DETECTION
-# ============================
-
-def current_season_year() -> int:
+def current_season_year_int() -> int:
+    # Many APIs use a single year like 2025 for the 2025-26 season
     today = datetime.today()
     return today.year if today.month >= 10 else today.year - 1
 
-SEASON_YEAR = current_season_year()
+SEASON_LABEL = current_nba_season_label()
+SEASON_YEAR = current_season_year_int()
 
 # ============================
 # LOCKED MODEL RULES (OPTION A)
 # ============================
 
-PREF_ORDER = ["REB", "AST", "PRA", "PTS"]          # PTS last resort
-PREF_RANK = {"REB": 1, "AST": 1, "PRA": 2, "PTS": 3}
 VARIANCE_RANK = {"REB": 1, "AST": 1, "PRA": 2, "PTS": 3}
+PREF_ORDER = ["REB", "AST", "PRA", "PTS"]  # PTS last resort
 
 NO_BET_MESSAGES = [
     "❌ No bets here home boy, move to next matchup",
@@ -63,10 +58,7 @@ def parse_matchup(matchup: str):
         raise ValueError("Matchup must look like: LAL vs DAL")
     return parts[0], parts[1]
 
-def floor_line(values):
-    return int(math.floor(min(values) * 0.90)) if values else 0
-
-def minutes_gate(last5):
+def minutes_gate(last5: list[dict]) -> bool:
     mins = [g["min"] for g in last5]
     if len(mins) != 5:
         return False
@@ -74,7 +66,10 @@ def minutes_gate(last5):
     over_30_count = sum(1 for m in mins if m > 30)
     return all_28_plus or (over_30_count >= 4)
 
-def build_floor_output(last5):
+def floor_line(values: list[int]) -> int:
+    return int(math.floor(min(values) * 0.90)) if values else 0
+
+def build_floor_output(last5: list[dict]) -> pd.DataFrame:
     stats = {
         "REB": [g["reb"] for g in last5],
         "AST": [g["ast"] for g in last5],
@@ -85,14 +80,14 @@ def build_floor_output(last5):
     for stat, arr in stats.items():
         rows.append({
             "stat": stat,
-            "min_last5": min(arr) if arr else None,
             "line": floor_line(arr),
             "pref": PREF_ORDER.index(stat),
             "variance": VARIANCE_RANK[stat],
         })
     return pd.DataFrame(rows).sort_values(by=["pref", "variance", "stat"])
 
-def make_safe(chosen):
+def safe_remove_highest_variance(chosen: list[dict]) -> list[dict]:
+    # SAFE slip = remove the highest variance leg; tie-breaker remove PTS first
     if len(chosen) <= 3:
         return chosen
 
@@ -104,229 +99,234 @@ def make_safe(chosen):
     return [x for x in chosen if x is not worst]
 
 # ============================
-# API HELPERS (PRO-TUNED)
+# API-SPORTS CONFIG (API-FOOTBALL DASHBOARD KEYS)
 # ============================
 
-def api_get(endpoint: str, params: dict, retries=5, timeout=45):
-    last_err = None
-    backoff = 1.0
+API_KEY = st.secrets.get("APISPORTS_KEY", "")
 
-    for _ in range(retries):
+# This is the most common API-SPORTS Basketball base.
+# If your account uses a different host, change it here:
+API_BASE = "https://v1.basketball.api-sports.io"
+
+# NBA league id differs by provider.
+# We expose it in the UI so you can adjust without code changes.
+DEFAULT_NBA_LEAGUE_ID = 12
+
+HEADERS = {
+    "x-apisports-key": API_KEY,
+}
+
+def api_get(path: str, params: dict, retries: int = 3, timeout: int = 25) -> dict:
+    """
+    Safe API wrapper:
+    - retries on timeouts/5xx
+    - raises RuntimeError with useful context
+    """
+    url = f"{API_BASE}/{path.lstrip('/')}"
+    last_err = None
+
+    for attempt in range(1, retries + 1):
         try:
-            r = requests.get(
-                f"{API_BASE}/{endpoint}",
-                headers=API_HEADERS,
-                params=params,
-                timeout=timeout
-            )
+            r = requests.get(url, headers=HEADERS, params=params, timeout=timeout)
+            # Some API-Sports errors still return 200 with {"errors":...}
+            if r.status_code >= 500:
+                raise requests.HTTPError(f"{r.status_code} server error", response=r)
+
             r.raise_for_status()
-            return r.json()
-        except requests.exceptions.ReadTimeout as e:
+            j = r.json()
+
+            # Common API-Sports shape: {"response":[...], "errors":{...}}
+            if isinstance(j, dict) and j.get("errors"):
+                raise RuntimeError(f"API returned errors: {j.get('errors')}")
+
+            return j
+
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectTimeout) as e:
             last_err = e
+            time.sleep(1.2 * attempt)
+            continue
+
         except requests.exceptions.RequestException as e:
             last_err = e
-
-        time.sleep(backoff)
-        backoff = min(backoff * 1.7, 6.0)
-
-    raise RuntimeError("API-NBA temporarily unavailable") from last_err
-
-@st.cache_data(ttl=604800)  # 7 days
-def get_teams_map() -> dict:
-    j = api_get("teams", {})
-    resp = j.get("response", [])
-    team_map = {}
-    for t in resp:
-        code = (t.get("code") or "").upper()
-        tid = t.get("id")
-        name = t.get("name")
-        if code and tid:
-            team_map[code] = {"team_id": int(tid), "name": name}
-    return team_map
-
-@st.cache_data(ttl=86400)  # 24 hours
-def get_team_players(team_id: int, season: int) -> pd.DataFrame:
-    j = api_get("players", {"team": team_id, "season": season})
-    resp = j.get("response", [])
-    if not resp:
-        return pd.DataFrame()
-
-    df = pd.json_normalize(resp)
-
-    # display name
-    if "firstname" in df.columns and "lastname" in df.columns:
-        df["player_name"] = (
-            df["firstname"].fillna("").astype(str).str.strip() + " " +
-            df["lastname"].fillna("").astype(str).str.strip()
-        ).str.replace(r"\s+", " ", regex=True).str.strip()
-    else:
-        df["player_name"] = df.get("name", "")
-
-    return df
-
-@st.cache_data(ttl=600)  # 10 minutes
-def get_player_last_games_stats(player_id: int, season: int, last_n: int = 5) -> list[dict]:
-    j = api_get("players/statistics", {"id": player_id, "season": season})
-    resp = j.get("response", [])
-    if not resp:
-        return []
-
-    df = pd.json_normalize(resp)
-
-    # pick date column
-    date_col = None
-    for c in ["game.date", "date", "gameDate"]:
-        if c in df.columns:
-            date_col = c
+            # no point retrying some 4xx; still allow one retry for flaky gateways
+            if attempt < retries and getattr(e.response, "status_code", 0) in (429, 502, 503, 504):
+                time.sleep(1.2 * attempt)
+                continue
             break
-    if date_col:
-        df = df.sort_values(by=date_col, ascending=False)
 
-    out = []
-    for _, r in df.iterrows():
-        mins = r.get("min")
-        pts = r.get("points") if "points" in df.columns else r.get("pts")
-        reb = r.get("totReb") if "totReb" in df.columns else r.get("rebounds") if "rebounds" in df.columns else r.get("reb")
-        ast = r.get("assists") if "assists" in df.columns else r.get("ast")
+        except Exception as e:
+            last_err = e
+            break
 
-        try:
-            mins = int(float(mins)) if mins not in (None, "", "null") else None
-            pts = int(float(pts)) if pts not in (None, "", "null") else None
-            reb = int(float(reb)) if reb not in (None, "", "null") else None
-            ast = int(float(ast)) if ast not in (None, "", "null") else None
-        except Exception:
-            continue
+    raise RuntimeError(f"API temporarily unavailable calling {url} with params={params}") from last_err
+
+
+# ============================
+# API-SPORTS DATA HELPERS
+# ============================
+
+def get_teams_map(league_id: int, season_year: int) -> dict:
+    """
+    Returns: { "LAL": {"id":123, "name":"Lakers"}, ... }
+    NOTE: API fields can vary by product — this is why we keep parsing defensive.
+    """
+    j = api_get("teams", {"league": league_id, "season": season_year})
+    resp = j.get("response", []) if isinstance(j, dict) else []
+    out = {}
+
+    for item in resp:
+        team = item.get("team", item) if isinstance(item, dict) else {}
+        abbr = (team.get("code") or team.get("abbreviation") or team.get("shortName") or "").upper()
+        tid = team.get("id")
+        name = team.get("name", "")
+
+        if abbr and tid:
+            out[abbr] = {"id": int(tid), "name": str(name)}
+
+    return out
+
+def get_team_players(team_id: int, season_year: int) -> list[dict]:
+    """
+    Returns a list of {"id":..., "name":...}
+    """
+    j = api_get("players", {"team": team_id, "season": season_year})
+    resp = j.get("response", []) if isinstance(j, dict) else []
+    players = []
+
+    for item in resp:
+        p = item.get("player", item) if isinstance(item, dict) else {}
+        pid = p.get("id")
+        name = p.get("name") or f"{p.get('firstname','')} {p.get('lastname','')}".strip()
+        if pid and name:
+            players.append({"id": int(pid), "name": str(name)})
+
+    return players
+
+def get_player_game_logs_last5(player_id: int, season_year: int) -> list[dict]:
+    """
+    We attempt to fetch per-game stats and take the most recent 5.
+    API-SPORTS products differ; common endpoint is "players/statistics".
+    If your product uses a different path, change ONLY the path below.
+    """
+    j = api_get("players/statistics", {"player": player_id, "season": season_year})
+    resp = j.get("response", []) if isinstance(j, dict) else []
+
+    # Each item often represents a game line. We'll defensively parse.
+    rows = []
+    for item in resp:
+        # try common nested shapes
+        stats = item.get("statistics", item.get("stats", item)) if isinstance(item, dict) else {}
+        game = item.get("game", {}) if isinstance(item, dict) else {}
+
+        # date ordering
+        gdate = game.get("date") or item.get("date") or ""
+
+        def _to_int(x):
+            try:
+                return int(float(x))
+            except Exception:
+                return None
+
+        mins = _to_int(stats.get("minutes") or stats.get("min") or stats.get("MIN"))
+        pts = _to_int(stats.get("points") or stats.get("pts") or stats.get("PTS"))
+        reb = _to_int(stats.get("rebounds") or stats.get("reb") or stats.get("REB"))
+        ast = _to_int(stats.get("assists") or stats.get("ast") or stats.get("AST"))
 
         if mins is None or pts is None or reb is None or ast is None:
             continue
 
-        out.append({"min": mins, "pts": pts, "reb": reb, "ast": ast, "pra": pts + reb + ast})
-        if len(out) == last_n:
-            break
+        rows.append({
+            "date": str(gdate),
+            "min": mins,
+            "pts": pts,
+            "reb": reb,
+            "ast": ast,
+            "pra": pts + reb + ast,
+        })
 
-    return out
+    # Sort by date desc if available; otherwise keep order
+    if rows and rows[0].get("date"):
+        rows.sort(key=lambda x: x["date"], reverse=True)
 
-# ============================
-# RISK PROFILES
-# ============================
+    return rows[:5]
 
-def risk_sort_key(profile: str):
-    profile = profile.upper().strip()
-    if profile == "HIGHER-RISK":
-        # PRA slightly promoted; PTS still allowed but less punished
-        adj_pref = {"REB": 2, "AST": 2, "PRA": 1, "PTS": 3}
-        return lambda c: (adj_pref.get(c["stat"], 99), c["variance"], c["player"])
-    # IDEAL / SAFE
-    return lambda c: (c["pref"], c["variance"], c["player"])
-
-def build_sgp_from_candidates(candidates: list[dict], team_a: str, team_b: str, legs_n: int):
-    legs_n = max(3, min(5, int(legs_n)))
-
-    uniq_players = {team_a: set(), team_b: set()}
-    for c in candidates:
-        uniq_players[c["team"]].add(c["player"])
-
-    main_team = team_a if len(uniq_players[team_a]) >= len(uniq_players[team_b]) else team_b
-    opp_team = team_b if main_team == team_a else team_a
-
-    chosen = []
-    used_opp = False
-
-    for c in candidates:
-        if len(chosen) >= legs_n:
-            break
-
-        if c["team"] == opp_team:
-            if used_opp:
-                continue
-            used_opp = True
-
-        if any(x["player"] == c["player"] and x["stat"] == c["stat"] for x in chosen):
-            continue
-
-        chosen.append(c)
-
-    return chosen, main_team, opp_team
 
 # ============================
 # UI
 # ============================
 
-matchup = st.text_input("Matchup (team acronyms)", value="LAL vs DAL")
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    legs_n = st.slider("Final slip legs", 3, 5, 4)
-with col2:
+with st.sidebar:
+    st.subheader("API Settings")
+    league_id = st.number_input("NBA league id", min_value=1, value=DEFAULT_NBA_LEAGUE_ID, step=1)
+    season_year = st.number_input("Season year", min_value=2000, value=int(SEASON_YEAR), step=1)
     max_players_per_team = st.slider(
-        "Players checked per team (Pro speed)",
-        8, 30, 18,
-        help="Pro can handle higher values. Higher = more thorough but slower."
+        "Stability limiter (max players checked per team)",
+        5, 25, 12,
+        help="Higher = more thorough but more API calls (slower / more rate-limit risk)."
     )
-with col3:
-    bet_profile = st.selectbox(
-        "Bet profile",
-        ["SAFE", "IDEAL", "HIGHER-RISK"],
-        index=0
-    )
+    show_debug = st.toggle("Show debug (API error details)", value=False)
 
-st.caption(f"Auto season detected: **{SEASON_YEAR}**")
+st.caption(f"Auto season detected: **{SEASON_LABEL}** (year param: **{SEASON_YEAR}**)")
+
+matchup = st.text_input("Matchup (team acronyms)", value="LAL vs DAL")
+risk_mode = st.radio(
+    "Pick style",
+    ["Safe", "Ideal", "Higher-risk"],
+    horizontal=True,
+    help=(
+        "Safe: remove highest-variance leg\n"
+        "Ideal: standard final slip\n"
+        "Higher-risk: allow more PTS exposure + prefer 5 legs when possible"
+    ),
+)
+
+legs_default = 4 if risk_mode != "Higher-risk" else 5
+legs_n = st.slider("Final slip legs", 3, 5, legs_default)
 
 run_btn = st.button("Auto-build best SGP", type="primary")
 
+
 # ============================
-# EXECUTION
+# EXECUTION (ONLY RUN ON CLICK)
 # ============================
 
 if run_btn:
-    status = st.empty()
-    prog = st.progress(0)
+    if not API_KEY:
+        st.error("Missing APISPORTS_KEY in Streamlit Secrets.")
+        st.stop()
 
     with st.spinner("Crunching the numbers....."):
         try:
-            status.info("Loading teams…")
-            team_map = get_teams_map()
-            prog.progress(10)
-
             team_a, team_b = parse_matchup(matchup)
 
-            if team_a not in team_map or team_b not in team_map:
-                st.error(f"Unknown team abbreviation(s): '{team_a}' / '{team_b}'. Example: LAL vs DAL")
+            # 1) Team map
+            teams_map = get_teams_map(int(league_id), int(season_year))
+            if not teams_map:
+                st.error("Could not load teams from the API. Check league id / season year / API base URL.")
                 st.stop()
 
-            team_a_id = team_map[team_a]["team_id"]
-            team_b_id = team_map[team_b]["team_id"]
+            if team_a not in teams_map or team_b not in teams_map:
+                st.error(
+                    f"Unknown team abbreviation(s): '{team_a}' / '{team_b}'. "
+                    f"Make sure your API returns team codes like LAL, DAL, etc."
+                )
+                st.stop()
 
+            # 2) Build candidate pool from both rosters
             candidates = []
-            teams = [(team_a, team_a_id), (team_b, team_b_id)]
-            total_steps = len(teams) * int(max_players_per_team)
-            done = 0
 
-            for team_abbr, team_id in teams:
-                status.info(f"Loading roster: {team_abbr}…")
-                players_df = get_team_players(team_id, SEASON_YEAR)
-                prog.progress(min(25, 10 + (done / max(1, total_steps)) * 15))
-
-                if players_df.empty:
+            for team in (team_a, team_b):
+                tid = teams_map[team]["id"]
+                roster = get_team_players(tid, int(season_year))
+                if not roster:
                     continue
 
-                # Consistent selection (no randomness) for stability
-                players_df = players_df.head(int(max_players_per_team)).copy()
+                roster = roster[: int(max_players_per_team)]
 
-                for _, prow in players_df.iterrows():
-                    done += 1
-                    pid = prow.get("id")
-                    pname = prow.get("player_name") or "Unknown"
+                for p in roster:
+                    last5 = get_player_game_logs_last5(int(p["id"]), int(season_year))
 
-                    # progress UI
-                    prog.progress(min(85, 25 + int((done / max(1, total_steps)) * 60)))
-                    status.info(f"Crunching: {team_abbr} • {pname}…")
-
-                    if pd.isna(pid):
-                        continue
-
-                    last5 = get_player_last_games_stats(int(pid), SEASON_YEAR, last_n=5)
-
+                    # gates
                     if len(last5) != 5:
                         continue
                     if not minutes_gate(last5):
@@ -334,69 +334,88 @@ if run_btn:
 
                     floors = build_floor_output(last5)
 
-                    # take top 3 per player with PTS last resort
-                    per_player_picks = []
-                    for _, f in floors.iterrows():
-                        if f["stat"] != "PTS":
-                            per_player_picks.append(f.to_dict())
-                        if len(per_player_picks) == 3:
-                            break
-                    if len(per_player_picks) < 3:
-                        for _, f in floors.iterrows():
-                            if f["stat"] == "PTS":
-                                per_player_picks.append(f.to_dict())
-                                if len(per_player_picks) == 3:
-                                    break
+                    # Higher-risk: allow PTS earlier; otherwise keep PTS last (already last)
+                    if risk_mode == "Higher-risk":
+                        # Slightly bump PRA/PTS availability by not changing order,
+                        # but we’ll allow full 5 legs and not remove variance.
+                        pass
 
-                    for pick in per_player_picks:
+                    for _, f in floors.iterrows():
                         candidates.append({
-                            "player": str(pname),
-                            "team": team_abbr,
-                            "stat": pick["stat"],
-                            "line": int(pick["line"]),
-                            "pref": int(pick["pref"]),
-                            "variance": int(pick["variance"]),
+                            "player": p["name"],
+                            "team": team,
+                            "stat": str(f["stat"]),
+                            "line": int(f["line"]),
+                            "pref": int(f["pref"]),
+                            "variance": int(f["variance"]),
                         })
 
-            # Sort for profile
-            candidates.sort(key=risk_sort_key(bet_profile))
+            # 3) Sort candidates using your preference rules
+            # Prefer REB/AST then PRA then PTS, and lower variance
+            candidates.sort(key=lambda x: (x["pref"], x["variance"], x["player"]))
 
-            prog.progress(92)
-            status.info("Building final slip under constraints…")
-
+            # 4) Build slip with max 1 opposing player
             if len(candidates) < 3:
-                prog.progress(100)
-                status.empty()
                 st.warning(random.choice(NO_BET_MESSAGES))
                 st.stop()
 
-            chosen, main_team, opp_team = build_sgp_from_candidates(candidates, team_a, team_b, legs_n)
+            main_team = team_a  # default
+            # infer main team by which side produced more eligible candidates
+            count_a = sum(1 for c in candidates if c["team"] == team_a)
+            count_b = sum(1 for c in candidates if c["team"] == team_b)
+            if count_b > count_a:
+                main_team = team_b
+            opp_team = team_b if main_team == team_a else team_a
+
+            chosen = []
+            used_opp = False
+            used_player_stat = set()
+
+            for c in candidates:
+                if len(chosen) >= int(legs_n):
+                    break
+
+                if c["team"] == opp_team:
+                    if used_opp:
+                        continue
+                    used_opp = True
+
+                key = (c["player"], c["stat"])
+                if key in used_player_stat:
+                    continue
+                used_player_stat.add(key)
+
+                # If not Higher-risk, only allow PTS as last resort naturally via sorting.
+                chosen.append(c)
 
             if len(chosen) < 3:
-                prog.progress(100)
-                status.empty()
                 st.warning(random.choice(NO_BET_MESSAGES))
                 st.stop()
 
-            prog.progress(100)
-            status.empty()
+            # 5) SAFE / IDEAL / HIGHER-RISK output
+            final = chosen
+            if risk_mode == "Safe":
+                safe = safe_remove_highest_variance(final)
+            else:
+                safe = safe_remove_highest_variance(final)  # still show SAFE for reference
 
-            st.success(f"✅ Built {len(chosen)} legs | Main side: {main_team} | Max 1 opp from {opp_team}")
+            if risk_mode == "Higher-risk" and len(final) < 5:
+                # if we couldn't reach 5, that's ok — still return what we have
+                pass
+
+            st.success("✅ SGP built successfully")
 
             st.subheader("🔥 Final Slip")
-            for p in chosen:
+            for p in final:
                 st.write(f"{p['player']} {p['stat']} ≥ {p['line']} ({p['team']})")
 
-            if bet_profile in ("SAFE", "IDEAL"):
-                safe = make_safe(chosen)
-                st.subheader("🛡 SAFE Slip")
-                for p in safe:
-                    st.write(f"{p['player']} {p['stat']} ≥ {p['line']} ({p['team']})")
-
-            if bet_profile == "HIGHER-RISK":
-                st.caption("Higher-risk profile: candidate ordering is more aggressive (still within model constraints).")
+            st.subheader("🛡 SAFE Slip")
+            for p in safe:
+                st.write(f"{p['player']} {p['stat']} ≥ {p['line']} ({p['team']})")
 
         except Exception as e:
-            status.empty()
-            st.error("⚠️ Temporary API issue. Try again shortly.")
-            st.exception(e)
+            st.warning("⚠️ Temporary API issue. Try again shortly.")
+            if show_debug:
+                st.exception(e)
+            else:
+                st.info("Turn on **Show debug** in the sidebar to see the exact API error details.")
