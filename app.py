@@ -11,6 +11,9 @@ st.set_page_config(
     layout="centered",
 )
 
+st.write("✅ App script loaded")
+
+
 # ============================
 # API HELPERS (NO AUTH)
 # ============================
