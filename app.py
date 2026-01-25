@@ -40,8 +40,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0",
 }
 
-LEAGUE_ID_NUMERIC = 12   # common NBA league id on Basketball API
-LEAGUE_ID_STRING = "standard"  # common league value on NBA v2 API
 
 # ============================================================
 # SEASON RESOLUTION (AUTO + SAFE, never future)
@@ -228,10 +226,8 @@ with col3:
 teams = get_team_display_list()
 if not teams:
     st.error("Teams unavailable from API-Sports.")
-    if show_debug:
-        st.write("Tried these team fetch attempts:")
-        st.json(teams_debug)
     st.stop()
+
 
 team_lookup = {t["label"]: t for t in teams}
 labels = list(team_lookup.keys())
@@ -279,8 +275,11 @@ def parse_minutes(val):
 
 @st.cache_data(ttl=1800)
 def get_last_games(team_id: int):
-    # some APIs want league numeric; keep numeric first
-    j, _, _, _ = api_get("games", {"league": LEAGUE_ID_NUMERIC, "season": API_SEASON_YEAR, "team": team_id})
+    j, _, _, _ = api_get(
+    "games",
+    {"league": LEAGUE_ID, "season": API_SEASON_YEAR, "team": team_id}
+)
+
     games = j.get("response", []) if isinstance(j, dict) else []
     games = sorted(games, key=lambda g: (g.get("date") or ""), reverse=True)
     return games[:5]
@@ -368,8 +367,6 @@ if run_btn:
                 st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
 
             if show_debug:
-                st.subheader("Debug: team fetch attempts")
-                st.json(teams_debug)
                 st.subheader("Debug: candidates (top 50)")
                 st.dataframe(pd.DataFrame(candidates).head(50), use_container_width=True)
 
