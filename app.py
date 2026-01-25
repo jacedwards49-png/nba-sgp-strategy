@@ -162,3 +162,77 @@ def choose_main_team(players, team_a, team_b):
     else:
         return team_b
 
+# ============================
+# UI (THIS WAS MISSING)
+# ============================
+
+st.title("Refined Floor-Based NBA SGP Builder")
+st.caption(
+    "Last 5 games only • Minutes gate • Floor lines • Max 1 opposing player"
+)
+
+matchup = st.text_input("Game matchup", "LAL vs DAL")
+
+players_text = st.text_area(
+    "Player names (one per line)",
+    "LeBron James\nAnthony Davis\nLuka Doncic\nKyrie Irving",
+    height=140,
+)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    lookback_days = st.number_input("Lookback days", 10, 90, 45)
+
+with col2:
+    per_player = st.number_input("Candidate legs per player", 1, 4, 3)
+
+if st.button("Build SGP Slip"):
+    try:
+        team_a, team_b = parse_matchup(matchup)
+        names = [n.strip() for n in players_text.splitlines() if n.strip()]
+
+        players = []
+
+        for name in names:
+            p = get_player_best_match(name)
+            last5, team = last5_game_logs(p["id"], lookback_days)
+
+            eligible = stat_eligibility(last5) and minutes_gate(last5)
+
+            floors = build_floor_output(last5) if eligible else None
+            picks = recommend_legs(floors, per_player) if eligible else []
+
+            players.append(
+                {
+                    "name": name,
+                    "team": team,
+                    "eligible": eligible,
+                    "picks": picks,
+                }
+            )
+
+        st.subheader("Player Eligibility")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Player": p["name"],
+                        "Team": p["team"],
+                        "Eligible": p["eligible"],
+                    }
+                    for p in players
+                ]
+            ),
+            use_container_width=True,
+        )
+
+        st.subheader("Recommended Legs")
+        for p in players:
+            if p["eligible"]:
+                st.markdown(f"**{p['name']} ({p['team']})**")
+                for leg in p["picks"]:
+                    st.write(f"{leg['stat']} ≥ {leg['floor']}")
+
+    except Exception as e:
+        st.error(str(e))
