@@ -458,7 +458,7 @@ if run_btn:
                 # Evaluate players (must have 5 games + minutes gate)
                 for info in player_logs.values():
                     last5 = info["games"][:5]
-                     if len(last5) != 5 or not minutes_gate(last5):
+                    if len(last5) != 5 or not minutes_gate(last5):
     for stat in PREF_ORDER:
         floor = floor_line([g[stat.lower()] for g in last5])
         score = near_miss_score(last5, stat, floor)
