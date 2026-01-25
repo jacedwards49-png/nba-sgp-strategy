@@ -4,6 +4,7 @@ import time
 import requests
 import pandas as pd
 import streamlit as st
+st.cache_data.clear()
 from datetime import datetime
 
 # ============================================================
