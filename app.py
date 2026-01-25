@@ -299,4 +299,5 @@ with col3:
 
 st.caption(f"Auto season: **{SEASON}**")
 
-run_btn = st.button("Auto-build best SGP",_
+run_btn = st.button("Auto-build best SGP", type="primary")
+
