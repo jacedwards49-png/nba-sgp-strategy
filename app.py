@@ -1,5 +1,6 @@
 import math
 import random
+import time
 import requests
 import pandas as pd
 import streamlit as st
@@ -58,7 +59,7 @@ NO_BET_MESSAGES = [
     "🧊 Cold game — zero edge",
     "🚫 Nothing clean here, pass it",
     "📉 Variance too high — bankroll protection engaged",
-    "😴 This matchup ain't it"
+    "😴 This matchup ain't it",
 ]
 
 def parse_matchup(matchup):
@@ -71,8 +72,8 @@ def parse_matchup(matchup):
 def minutes_gate(last5):
     mins = [g["min"] for g in last5]
     return (
-        len(mins) == 5 and
-        (all(m >= 28 for m in mins) or sum(1 for m in mins if m > 30) >= 4)
+        len(mins) == 5
+        and (all(m >= 28 for m in mins) or sum(1 for m in mins if m > 30) >= 4)
     )
 
 def floor_line(values):
@@ -96,28 +97,52 @@ def build_floor_output(last5):
     return pd.DataFrame(rows).sort_values(by=["pref", "variance"])
 
 def make_safe(chosen):
-    if len(chosen) <= 3:
-        return chosen
-    return chosen[:-1]
+    return chosen if len(chosen) <= 3 else chosen[:-1]
 
 # ============================
-# NBA API HELPERS
+# 🔒 NBA API (RETRY-SAFE)
 # ============================
 
-def _nba_get(endpoint, params):
-    r = requests.get(f"{NBA_BASE}/{endpoint}", headers=NBA_HEADERS, params=params, timeout=20)
-    r.raise_for_status()
-    return r.json()
+def _nba_get(endpoint, params, retries=3, timeout=30):
+    last_error = None
+
+    for attempt in range(retries):
+        try:
+            r = requests.get(
+                f"{NBA_BASE}/{endpoint}",
+                headers=NBA_HEADERS,
+                params=params,
+                timeout=timeout,
+            )
+            r.raise_for_status()
+            return r.json()
+
+        except requests.exceptions.ReadTimeout as e:
+            last_error = e
+            time.sleep(1.5)
+
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            break
+
+    raise RuntimeError("NBA Stats API temporarily unavailable") from last_error
 
 @st.cache_data(ttl=86400)
 def get_team_map():
-    j = _nba_get("leaguedashteamstats", {
-        "LeagueID": "00",
-        "Season": SEASON,
-        "SeasonType": "Regular Season",
-        "PerMode": "PerGame",
-        "MeasureType": "Base",
-    })
+    try:
+        j = _nba_get(
+            "leaguedashteamstats",
+            {
+                "LeagueID": "00",
+                "Season": SEASON,
+                "SeasonType": "Regular Season",
+                "PerMode": "PerGame",
+                "MeasureType": "Base",
+            },
+        )
+    except Exception:
+        return {}
+
     rs = j["resultSets"][0]
     df = pd.DataFrame(rs["rowSet"], columns=rs["headers"])
     return {row["TEAM_ABBREVIATION"]: int(row["TEAM_ID"]) for _, row in df.iterrows()}
@@ -130,11 +155,10 @@ def get_team_roster(team_id):
 
 @st.cache_data(ttl=600)
 def get_player_gamelog(player_id):
-    j = _nba_get("playergamelog", {
-        "PlayerID": player_id,
-        "Season": SEASON,
-        "SeasonType": "Regular Season"
-    })
+    j = _nba_get(
+        "playergamelog",
+        {"PlayerID": player_id, "Season": SEASON, "SeasonType": "Regular Season"},
+    )
     rs = j["resultSets"][0]
     return pd.DataFrame(rs["rowSet"], columns=rs["headers"])
 
@@ -154,7 +178,7 @@ def last5_games(player_id):
     return out
 
 # ============================
-# UI INPUTS
+# UI
 # ============================
 
 matchup = st.text_input("Matchup (team acronyms)", value="LAL vs DAL")
@@ -172,6 +196,10 @@ if run_btn:
         team_a, team_b = parse_matchup(matchup)
         team_map = get_team_map()
 
+        if not team_map:
+            st.error("🚫 NBA Stats API is temporarily unavailable. Please try again shortly.")
+            st.stop()
+
         candidates = []
 
         for team in (team_a, team_b):
@@ -184,7 +212,6 @@ if run_btn:
                     continue
 
                 floors = build_floor_output(last5)
-
                 for _, f in floors.iterrows():
                     candidates.append({
                         "player": row["PLAYER"],
@@ -197,8 +224,7 @@ if run_btn:
 
         candidates.sort(key=lambda x: (x["pref"], x["variance"]))
 
-        # 🚫 NO EDGE GUARD
-        if not candidates or len(candidates) < 3:
+        if len(candidates) < 3:
             st.warning(random.choice(NO_BET_MESSAGES))
             st.stop()
 
