@@ -5,9 +5,11 @@ import pandas as pd
 import streamlit as st
 from datetime import date, timedelta
 
-API_KEY = os.getenv("BALLDONTLIE_API_KEY", "YOUR_API_KEY")
+API_KEY = st.secrets.get("BALLDONTLIE_API_KEY", os.getenv("BALLDONTLIE_API_KEY"))
 BASE = "https://api.balldontlie.io/v1"
-HEADERS = {"Authorization": f"Bearer {API_KEY}"}
+if not API_KEY:
+    st.error("BALLDONTLIE_API_KEY not found in Streamlit Secrets.")
+    st.stop()
 
 
 st.set_page_config(page_title="Refined NBA SGP Builder (Option A)", layout="centered")
@@ -28,11 +30,16 @@ def _require_key():
 @st.cache_data(ttl=300)
 def search_players(search_name: str, per_page: int = 25):
     r = requests.get(
-        f"{BASE}/players",
-        headers=HEADERS,
-        params={"search": search_name, "per_page": per_page},
-        timeout=20,
-    )
+    f"{BASE}/players",
+    params={
+        "search": search_name,
+        "per_page": per_page,
+        "api_key": API_KEY,
+    },
+    timeout=20,
+)
+
+
     r.raise_for_status()
     return r.json()["data"]
 
@@ -46,7 +53,12 @@ def get_player_best_match(search_name: str) -> dict:
 
 @st.cache_data(ttl=86400)
 def get_teams():
-    r = requests.get(f"{BASE}/teams", headers=HEADERS, timeout=20)
+    r = requests.get(
+    f"{BASE}/teams",
+    params={"api_key": API_KEY},
+    timeout=20,
+)
+
     r.raise_for_status()
     data = r.json()["data"]
     return {t["abbreviation"].upper(): t for t in data}
@@ -55,14 +67,17 @@ def get_teams():
 @st.cache_data(ttl=120)
 def fetch_stats(player_id: int, start: str, end: str, per_page: int = 100):
     params = {
-        "player_ids[]": player_id,
-        "start_date": start,
-        "end_date": end,
-        "per_page": per_page,
-        "postseason": "false",
-        "period": 0,
-    }
-    r = requests.get(f"{BASE}/stats", headers=HEADERS, params=params, timeout=20)
+    "player_ids[]": player_id,
+    "start_date": start,
+    "end_date": end,
+    "per_page": per_page,
+    "postseason": "false",
+    "period": 0,
+    "api_key": API_KEY,
+}
+
+    r = requests.get(f"{BASE}/stats", params=params, timeout=20)
+
     r.raise_for_status()
     return r.json()["data"]
 
