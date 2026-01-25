@@ -151,6 +151,19 @@ team_lookup = {t["label"]: t for t in teams}
 labels = list(team_lookup.keys())
 
 # ============================================================
+# TEMP DEBUG — VERIFY TEAMS API RESPONSE
+# ============================================================
+
+with st.expander("DEBUG – Raw API-Sports /teams response"):
+    try:
+        raw = api_get("teams", {"league": 12})
+        st.write("Keys:", raw.keys() if isinstance(raw, dict) else type(raw))
+        st.json(raw)
+    except Exception as e:
+        st.exception(e)
+
+
+# ============================================================
 # UI — TEAM DROPDOWNS
 # ============================================================
 
