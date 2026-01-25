@@ -149,7 +149,13 @@ def recommend_legs(df, per_player):
 
 def choose_main_team(players, team_a, team_b):
     counts = {team_a: 0, team_b: 0}
+
     for p in players:
         if p["eligible"] and p["team"] in counts:
             counts[p["team"]] += 1
-    return team_a if counts[team_a_]()_
+
+    if counts[team_a] >= counts[team_b]:
+        return team_a
+    else:
+        return team_b
+
