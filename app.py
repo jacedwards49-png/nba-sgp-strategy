@@ -127,7 +127,7 @@ def api_get(path, params, retries=3):
 
 @st.cache_data(ttl=86400)
 def get_team_display_list():
-    j = api_get("teams", {"league": LEAGUE_ID, "season": API_SEASON_YEAR})
+    j = api_get("teams", {"league": LEAGUE_ID})
     out = []
     for t in j.get("response", []):
         team = t.get("team", t)
