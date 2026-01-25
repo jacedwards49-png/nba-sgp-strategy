@@ -25,6 +25,9 @@ API_KEY = st.secrets.get("API_SPORTS_KEY")
 if not API_KEY:
     st.error("Missing API_SPORTS_KEY in Streamlit Secrets.")
     st.stop()
+    
+LEAGUE_ID = 12  # NBA league ID for API-Sports
+
 
 API_BASES = [
     "https://v1.basketball.api-sports.io",  # Basketball API
@@ -222,7 +225,7 @@ with col2:
 with col3:
     show_debug = st.toggle("Show debug", False)
 
-teams, teams_debug = get_team_display_list()
+teams = get_team_display_list()
 if not teams:
     st.error("Teams unavailable from API-Sports.")
     if show_debug:
