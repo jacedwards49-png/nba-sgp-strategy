@@ -48,18 +48,7 @@ def get_player_best_match(search_name: str) -> dict:
     return data[0]  # best match (usually first)
 
 
-@st.cache_data(ttl=86400)
-def get_teams():
-    r = requests.get(
-    f"{BASE}/teams",
-    timeout=20,
-)
 
-
-
-    r.raise_for_status()
-    data = r.json()["data"]
-    return {t["abbreviation"].upper(): t for t in data}
 
 
 @st.cache_data(ttl=120)
@@ -120,7 +109,12 @@ def last5_game_logs(player_id: int, lookback_days: int = 45):
         if len(last5) == 5:
             break
 
-    return last5
+    team_abbrev = None
+if rows:
+    team_abbrev = rows[0]["team"]["abbreviation"]
+
+return last5, team_abbrev
+
 
 
 # ----------------------------
@@ -355,12 +349,7 @@ if run_btn:
         st.warning("Add at least one player name.")
         st.stop()
 
-    try:
-        team_a, team_b = parse_matchup(matchup)
-        teams = get_teams()
-        if team_a not in teams or team_b not in teams:
-            st.error(f"Unknown team abbreviation(s). Got '{team_a}' and '{team_b}'. Example: LAL vs DAL")
-            st.stop()
+    
     except Exception as e:
         st.error(str(e))
         st.stop()
@@ -372,9 +361,16 @@ if run_btn:
         try:
             p0 = get_player_best_match(name)
             pid = p0["id"]
-            t_abbrev = player_team_abbrev(p0) or "?"
+            # infer team from most recent game log (authoritative)
+t_abbrev = "?"
+if last5:
+    team_obj = rows[0].get("team") if "team" in rows[0] else None
+    if team_obj:
+        t_abbrev = team_obj.get("abbreviation", "?")
 
-            last5 = last5_game_logs(pid, lookback_days=int(lookback))
+
+            last5, t_abbrev = last5_game_logs(pid, lookback_days=int(lookback))
+
             logs_df = pd.DataFrame(last5) if last5 else pd.DataFrame()
 
             elig = stat_eligibility(last5)
