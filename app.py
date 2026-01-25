@@ -61,6 +61,33 @@ def minutes_gate(last5):
 def floor_line(values):
     return int(math.floor(min(values) * 0.90)) if values else 0
 
+def near_miss_score(last5, stat, floor):
+    vals = [g[stat.lower()] for g in last5]
+    mins = [g["min"] for g in last5]
+
+    score = 0
+
+    # Stat consistency
+    if sum(v >= floor for v in vals) == 4:
+        score += 1
+
+    # Minutes near miss
+    if not minutes_gate(last5):
+        if sum(m >= 28 for m in mins) == 4:
+            score += 1
+        else:
+            score += 2
+
+    # Floor closeness
+    if min(vals) == floor - 1:
+        score += 1
+
+    # Variance penalty
+    score += VARIANCE_RANK[stat] - 1
+
+    return score
+
+
 def make_safe(chosen):
     """SAFE slip removes the highest variance leg. Tie-breaker: remove PTS first."""
     if len(chosen) <= 3:
@@ -381,6 +408,8 @@ if run_btn:
         try:
             candidates = []
             eligible_players = []
+            near_miss_candidates = []
+
 
             all_debug = {"teams": teams_debug, "last_games": {}, "player_stats": {}}
 
@@ -429,8 +458,23 @@ if run_btn:
                 # Evaluate players (must have 5 games + minutes gate)
                 for info in player_logs.values():
                     last5 = info["games"][:5]
-                    if len(last5) != 5 or not minutes_gate(last5):
-                        continue
+                     if len(last5) != 5 or not minutes_gate(last5):
+    for stat in PREF_ORDER:
+        floor = floor_line([g[stat.lower()] for g in last5])
+        score = near_miss_score(last5, stat, floor)
+
+        near_miss_candidates.append(
+            {
+                "player": info["name"],
+                "team": info["team"],
+                "stat": stat,
+                "line": floor,
+                "score": score,
+                "variance": VARIANCE_RANK[stat],
+            }
+        )
+    continue
+
 
                     eligible_players.append({"player": info["name"], "team": info["team"]})
 
