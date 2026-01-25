@@ -493,11 +493,26 @@ if run_btn:
                         )
 
             if len(eligible_players) == 0 or len(candidates) < 3:
-                st.warning(random.choice(NO_BET_MESSAGES))
-                if show_debug:
-                    st.subheader("Debug: API calls")
-                    st.json(all_debug)
-                st.stop()
+    st.warning(random.choice(NO_BET_MESSAGES))
+
+    if near_miss_candidates:
+        st.subheader("🟡 Closest Possible Parlay (did not fully qualify)")
+
+        # Rank by lowest variance, then closest to hitting
+        near_miss_candidates.sort(
+            key=lambda x: (x["variance"], -x["score"])
+        )
+
+        fallback_legs = near_miss_candidates[:mode_to_legs(risk_mode, legs_n)]
+
+        for p in fallback_legs:
+            st.write(
+                f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]}) '
+                f'(miss score: {round(p["score"], 2)})'
+            )
+
+    st.stop()
+
 
             candidates.sort(key=lambda x: (x["pref"], x["variance"], x["player"]))
 
