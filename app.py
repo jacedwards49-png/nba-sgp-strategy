@@ -22,14 +22,18 @@ st.set_page_config(page_title="Refined NBA SGP Builder (Option A)", layout="cent
 # API helpers
 # ----------------------------
 @st.cache_data(ttl=300)
-def r = requests.get(
-    f"{BASE}/players",
-    params={
-        "search": search_name,
-        "per_page": per_page,
-    },
-    timeout=20,
-)
+def search_players(search_name: str, per_page: int = 25):
+    r = requests.get(
+        f"{BASE}/players",
+        params={
+            "search": search_name,
+            "per_page": per_page,
+        },
+        timeout=20,
+    )
+
+    r.raise_for_status()
+    return r.json()["data"]
 
 
 
