@@ -7,6 +7,21 @@ import streamlit as st
 from datetime import datetime
 
 # ============================================================
+# TEAM CODE NORMALIZATION (API-Sports → NBA standard)
+# ============================================================
+
+TEAM_CODE_NORMALIZATION = {
+    "NY": "NYK",
+    "GS": "GSW",
+    "SA": "SAS",
+    "NO": "NOP",
+    "OKLA": "OKC",
+    "PHO": "PHX",
+    "BRK": "BKN",
+}
+
+
+# ============================================================
 # STREAMLIT SETUP
 # ============================================================
 
@@ -117,13 +132,18 @@ def get_teams_map():
     j = api_get("teams", {"league": 12, "season": SEASON_YEAR})
     teams = j.get("response", [])
     out = {}
+
     for t in teams:
         team = t.get("team", t)
-        code = (team.get("code") or "").upper()
+        raw_code = (team.get("code") or "").upper()
+        code = TEAM_CODE_NORMALIZATION.get(raw_code, raw_code)
         tid = team.get("id")
+
         if code and tid:
             out[code] = int(tid)
+
     return out
+
 
 @st.cache_data(ttl=1800)
 def get_last_games(team_id):
