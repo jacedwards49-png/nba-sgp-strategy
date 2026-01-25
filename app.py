@@ -7,7 +7,8 @@ from datetime import date, timedelta
 
 API_KEY = os.getenv("BALLDONTLIE_API_KEY", "YOUR_API_KEY")
 BASE = "https://api.balldontlie.io/v1"
-HEADERS = {"Authorization": API_KEY}
+HEADERS = {"Authorization": f"Bearer {API_KEY}"}
+
 
 st.set_page_config(page_title="Refined NBA SGP Builder (Option A)", layout="centered")
 
