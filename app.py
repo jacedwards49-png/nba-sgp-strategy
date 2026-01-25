@@ -213,35 +213,40 @@ def api_get(path, params, retries=3, timeout=25):
 @st.cache_data(ttl=86400)
 def get_team_display_list():
     """
-    NBA teams derived from STANDINGS.
+    Build NBA teams list from recent games.
+    This endpoint is supported on ALL API-Sports Basketball plans.
     """
-    j, _, _, _ = api_get(  # ✅ FIX: unpack return
-        "standings",
-        {"league": LEAGUE_ID, "season": API_SEASON_YEAR},
+    j, _, _, _ = api_get(
+        "games",
+        {
+            "league": LEAGUE_ID,
+            "season": API_SEASON_YEAR,
+        }
     )
 
-    standings = j.get("response", []) if isinstance(j, dict) else []
-    out = []
+    games = j.get("response", []) if isinstance(j, dict) else []
 
-    for entry in standings:
-        team = entry.get("team", {})
-        tid = team.get("id")
-        name = team.get("name")
-        code = (team.get("code") or "").upper()
-        logo = team.get("logo")
+    teams = {}
 
-        if tid and name and code:
-            out.append(
-                {
+    for g in games:
+        for side in ("home", "away"):
+            team = g.get("teams", {}).get(side, {})
+            tid = team.get("id")
+            name = team.get("name")
+            code = (team.get("code") or "").upper()
+            logo = team.get("logo")
+
+            if tid and name and code:
+                teams[code] = {
                     "code": code,
                     "team_id": int(tid),
-                    "name": str(name),
+                    "name": name,
                     "logo": logo,
                     "label": f"{name} ({code})",
                 }
-            )
 
-    return sorted(out, key=lambda x: x["name"])
+    return sorted(teams.values(), key=lambda x: x["name"])
+
 
 # ============================================================
 # UI — CONTROLS (UNCHANGED)
