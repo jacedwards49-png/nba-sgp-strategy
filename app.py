@@ -7,27 +7,13 @@ import streamlit as st
 from datetime import datetime
 
 # ============================================================
-# TEAM CODE NORMALIZATION (API-Sports → NBA standard)
-# ============================================================
-
-TEAM_CODE_NORMALIZATION = {
-    "NY": "NYK",
-    "GS": "GSW",
-    "SA": "SAS",
-    "NO": "NOP",
-    "OKLA": "OKC",
-    "PHO": "PHX",
-    "BRK": "BKN",
-}
-
-# ============================================================
-# STREAMLIT SETUP (UNCHANGED UI)
+# STREAMLIT SETUP
 # ============================================================
 
 st.set_page_config(page_title="NBA SGP Ultimate Builder (Option A)", layout="centered")
 st.title("NBA SGP Ultimate Builder (Option A)")
 st.caption(
-    "Team-only input • API-Sports NBA • Last 5 only • 5/5 gate • Minutes gate • "
+    "Team dropdown • API-Sports NBA • Last 5 only • 5/5 gate • Minutes gate • "
     "Floor lines • Prefer REB/AST/PRA • Max 1 opposing player • FINAL + SAFE"
 )
 
@@ -36,11 +22,14 @@ st.caption(
 # ============================================================
 
 API_KEY = st.secrets.get("API_SPORTS_KEY")
-API_BASE = "https://v1.basketball.api-sports.io"
-
 if not API_KEY:
-    st.error("Missing API_SPORTS_KEY in Streamlit Secrets")
+    st.error("Missing API_SPORTS_KEY in Streamlit Secrets.")
     st.stop()
+
+API_BASES = [
+    "https://v1.basketball.api-sports.io",
+    "https://v2.nba.api-sports.io",
+]
 
 HEADERS = {
     "x-apisports-key": API_KEY,
@@ -48,8 +37,10 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0",
 }
 
+LEAGUE_ID = 12  # NBA on API-Sports
+
 # ============================================================
-# NBA SEASON LOGIC (AUTO + CLAMPED)
+# SEASON RESOLUTION (AUTO + SAFE)
 # ============================================================
 
 def current_nba_season_start_year() -> int:
@@ -58,46 +49,32 @@ def current_nba_season_start_year() -> int:
 
 @st.cache_data(ttl=86400)
 def resolve_api_sports_season() -> int:
-    """
-    Determines the latest NBA season API-Sports supports.
-    Falls back safely if API-Sports does not return seasons.
-    """
+    current = current_nba_season_start_year()
     try:
-        r = requests.get(
-            f"{API_BASE}/seasons",
-            headers={
-                "x-apisports-key": API_KEY,
-                "Accept": "application/json",
-                "User-Agent": "Mozilla/5.0",
-            },
-            params={"league": 12},
-            timeout=20,
-        )
-        r.raise_for_status()
-
-        seasons = [int(s) for s in r.json().get("response", [])]
-        current = current_nba_season_start_year()
-        valid = [s for s in seasons if s <= current]
-
-        if valid:
-            return max(valid)
-
+        for base in API_BASES:
+            r = requests.get(
+                f"{base}/seasons",
+                headers=HEADERS,
+                params={"league": LEAGUE_ID},
+                timeout=20,
+            )
+            if r.status_code == 200:
+                seasons = [int(s) for s in r.json().get("response", [])]
+                valid = [s for s in seasons if s <= current]
+                if valid:
+                    return max(valid)
     except Exception:
-        pass  # swallow error and fall back safely
+        pass
+    return current - 1  # safe fallback
 
-    # ✅ SAFE fallback = last completed NBA season
-    return current_nba_season_start_year() - 1
-
-
-NBA_SEASON_START = current_nba_season_start_year()
 API_SEASON_YEAR = resolve_api_sports_season()
-
 st.caption(
-    f"Auto season detected: **{NBA_SEASON_START}-{str(NBA_SEASON_START+1)[-2:]}**"
+    f"NBA season: **{current_nba_season_start_year()}–{str(current_nba_season_start_year()+1)[-2:]}** "
+    f"(API data: **{API_SEASON_YEAR}**)"
 )
 
 # ============================================================
-# OPTION A MODEL (LOCKED)
+# LOCKED OPTION A MODEL RULES
 # ============================================================
 
 VARIANCE_RANK = {"REB": 1, "AST": 1, "PRA": 2, "PTS": 3}
@@ -111,82 +88,96 @@ NO_BET_MESSAGES = [
     "😴 This matchup ain't it",
 ]
 
-def parse_matchup(matchup):
-    parts = matchup.upper().replace("@", "VS").replace("VS.", "VS").split("VS")
-    parts = [p.strip() for p in parts if p.strip()]
-    if len(parts) != 2:
-        raise ValueError("Matchup must look like: LAL vs DAL")
-    return parts[0], parts[1]
-
 def minutes_gate(last5):
     mins = [g["min"] for g in last5]
     return len(mins) == 5 and (all(m >= 28 for m in mins) or sum(m > 30 for m in mins) >= 4)
 
-def floor_line(vals):
-    return int(math.floor(min(vals) * 0.90)) if vals else 0
+def floor_line(values):
+    return int(math.floor(min(values) * 0.90)) if values else 0
 
 def make_safe(chosen):
-    return chosen if len(chosen) <= 3 else chosen[:-1]
+    if len(chosen) <= 3:
+        return chosen
+    worst = max(chosen, key=lambda x: (x["variance"], x["stat"] == "PTS"))
+    return [x for x in chosen if x is not worst]
 
 # ============================================================
-# API HELPERS
+# API HELPERS (RETRY-SAFE)
 # ============================================================
 
-def api_get(path, params):
-    r = requests.get(
-        f"{API_BASE}/{path}",
-        headers=HEADERS,
-        params=params,
-        timeout=25,
-    )
-    r.raise_for_status()
-    return r.json().get("response", [])
+def api_get(path, params, retries=3):
+    last_error = None
+    for base in API_BASES:
+        url = f"{base}/{path.lstrip('/')}"
+        for _ in range(retries):
+            try:
+                r = requests.get(url, headers=HEADERS, params=params, timeout=25)
+                if r.status_code in (429, 500, 502, 503):
+                    time.sleep(1.5)
+                    continue
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                last_error = e
+    raise RuntimeError("API-Sports request failed") from last_error
+
+# ============================================================
+# TEAM DROPDOWN DATA
+# ============================================================
 
 @st.cache_data(ttl=86400)
-def get_teams_map():
-    teams = api_get("teams", {"league": 12, "season": API_SEASON_YEAR})
-    out = {}
-    for t in teams:
-        team = t.get("team", {})
-        raw = (team.get("code") or "").upper()
-        code = TEAM_CODE_NORMALIZATION.get(raw, raw)
-        tid = team.get("id")
-        if code and tid:
-            out[code] = int(tid)
-    return out
+def get_team_display_list():
+    j = api_get("teams", {"league": LEAGUE_ID, "season": API_SEASON_YEAR})
+    out = []
+    for t in j.get("response", []):
+        team = t.get("team", t)
+        if team.get("code") and team.get("id"):
+            out.append({
+                "code": team["code"].upper(),
+                "team_id": int(team["id"]),
+                "name": team["name"],
+                "logo": team.get("logo"),
+                "label": f'{team["name"]} ({team["code"].upper()})',
+            })
+    return sorted(out, key=lambda x: x["name"])
 
-@st.cache_data(ttl=1800)
-def get_last_games(team_id):
-    games = api_get("games", {
-        "league": 12,
-        "season": API_SEASON_YEAR,
-        "team": team_id,
-    })
-    games = sorted(games, key=lambda g: g.get("date", ""), reverse=True)
-    return games[:5]
+teams = get_team_display_list()
+if not teams:
+    st.error("Teams unavailable from API-Sports.")
+    st.stop()
 
-@st.cache_data(ttl=1800)
-def get_game_stats(game_id, team_id):
-    return api_get("players/statistics", {
-        "game": game_id,
-        "team": team_id,
-    })
-
-def parse_minutes(val):
-    if not val:
-        return 0
-    s = str(val)
-    return int(float(s.split(":")[0])) if ":" in s else int(float(s))
+team_lookup = {t["label"]: t for t in teams}
+labels = list(team_lookup.keys())
 
 # ============================================================
-# UI INPUTS (UNCHANGED)
+# UI — TEAM DROPDOWNS
 # ============================================================
 
-matchup = st.text_input("Matchup (team acronyms)", value="LAL vs DAL")
+colA, colB, colC = st.columns([5, 1, 5])
+
+with colA:
+    team_a_label = st.selectbox("Team A", labels, index=0)
+with colB:
+    st.markdown("<br><h3 style='text-align:center'>vs</h3>", unsafe_allow_html=True)
+with colC:
+    team_b_label = st.selectbox("Team B", labels, index=1)
+
+team_a = team_lookup[team_a_label]
+team_b = team_lookup[team_b_label]
+
+logo1, logo2 = st.columns(2)
+with logo1:
+    st.image(team_a["logo"], width=80)
+with logo2:
+    st.image(team_b["logo"], width=80)
+
+# ============================================================
+# CONTROLS
+# ============================================================
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    legs_n = st.slider("Ideal legs", 3, 5, 4)
+    legs_n = st.slider("Ideal legs (3–5)", 3, 5, 4)
 with col2:
     risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"], index=1)
 with col3:
@@ -195,33 +186,45 @@ with col3:
 run_btn = st.button("Auto-build best SGP", type="primary")
 
 # ============================================================
+# DATA PULL HELPERS
+# ============================================================
+
+def parse_minutes(val):
+    if not val:
+        return 0
+    s = str(val)
+    return int(float(s.split(":")[0])) if ":" in s else int(float(s))
+
+@st.cache_data(ttl=1800)
+def get_last_games(team_id):
+    j = api_get("games", {"league": LEAGUE_ID, "season": API_SEASON_YEAR, "team": team_id})
+    games = j.get("response", [])
+    games = sorted(games, key=lambda g: g.get("date", ""), reverse=True)
+    return games[:5]
+
+@st.cache_data(ttl=1800)
+def get_game_stats(game_id, team_id):
+    j = api_get("players/statistics", {"game": game_id, "team": team_id})
+    return j.get("response", [])
+
+# ============================================================
 # EXECUTION
 # ============================================================
 
 if run_btn:
     with st.spinner("Crunching the numbers....."):
         try:
-            team_a, team_b = parse_matchup(matchup)
-            team_map = get_teams_map()
-
-            if team_a not in team_map or team_b not in team_map:
-                st.error("Invalid team abbreviation. Example: LAL vs DAL")
-                if show_debug:
-                    st.write("Available teams:", sorted(team_map.keys()))
-                st.stop()
-
             candidates = []
 
             for team in (team_a, team_b):
-                team_id = team_map[team]
-                games = get_last_games(team_id)
+                games = get_last_games(team["team_id"])
                 player_logs = {}
 
                 for g in games:
                     gid = g.get("id")
                     if not gid:
                         continue
-                    rows = get_game_stats(gid, team_id)
+                    rows = get_game_stats(gid, team["team_id"])
                     for r in rows:
                         p = r.get("player", {})
                         pid = p.get("id")
@@ -229,6 +232,7 @@ if run_btn:
                         s = r.get("statistics", {})
                         if not pid:
                             continue
+
                         log = {
                             "min": parse_minutes(s.get("minutes")),
                             "pts": int(s.get("points", 0)),
@@ -236,7 +240,7 @@ if run_btn:
                             "ast": int(s.get("assists", 0)),
                         }
                         log["pra"] = log["pts"] + log["reb"] + log["ast"]
-                        player_logs.setdefault(pid, {"name": name, "team": team, "games": []})
+                        player_logs.setdefault(pid, {"name": name, "team": team["code"], "games": []})
                         player_logs[pid]["games"].append(log)
 
                 for info in player_logs.values():
@@ -244,7 +248,7 @@ if run_btn:
                     if len(last5) != 5 or not minutes_gate(last5):
                         continue
 
-                    for stat in ["REB", "AST", "PRA", "PTS"]:
+                    for stat in PREF_ORDER:
                         vals = [g[stat.lower()] for g in last5]
                         candidates.append({
                             "player": info["name"],
@@ -269,11 +273,14 @@ if run_btn:
 
             st.subheader("🔥 Final Slip")
             for p in final:
-                st.write(f"• {p['player']} {p['stat']} ≥ {p['line']} ({p['team']})")
+                st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
 
             st.subheader("🛡 SAFE Slip")
             for p in safe:
-                st.write(f"• {p['player']} {p['stat']} ≥ {p['line']} ({p['team']})")
+                st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+
+            if show_debug:
+                st.dataframe(pd.DataFrame(candidates).head(50), use_container_width=True)
 
         except Exception as e:
             st.warning("⚠️ Temporary API issue. Try again shortly.")
