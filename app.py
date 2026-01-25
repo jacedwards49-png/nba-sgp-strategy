@@ -457,22 +457,30 @@ if run_btn:
 
                 # Evaluate players (must have 5 games + minutes gate)
                 for info in player_logs.values():
-                    last5 = info["games"][:5]
-                    if len(last5) != 5 or not minutes_gate(last5):
-    for stat in PREF_ORDER:
-        floor = floor_line([g[stat.lower()] for g in last5])
-        score = near_miss_score(last5, stat, floor)
+    last5 = info["games"][:5]
 
-        near_miss_candidates.append(
-            {
-                "player": info["name"],
-                "team": info["team"],
-                "stat": stat,
-                "line": floor,
-                "score": score,
-                "variance": VARIANCE_RANK[stat],
-            }
-        )
+    # Enforce Option A: must have exactly 5 games + minutes gate
+    if len(last5) != 5 or not minutes_gate(last5):
+        continue
+
+    eligible_players.append({
+        "player": info["name"],
+        "team": info["team"]
+    })
+
+    for stat in PREF_ORDER:
+        key = stat.lower()
+        vals = [g[key] for g in last5]
+
+        candidates.append({
+            "player": info["name"],
+            "team": info["team"],
+            "stat": stat,
+            "line": floor_line(vals),
+            "pref": PREF_ORDER.index(stat),
+            "variance": VARIANCE_RANK[stat],
+        })
+
     continue
 
 
