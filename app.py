@@ -58,17 +58,36 @@ def current_nba_season_start_year() -> int:
 
 @st.cache_data(ttl=86400)
 def resolve_api_sports_season() -> int:
-    r = requests.get(
-        f"{API_BASE}/seasons",
-        headers=HEADERS,
-        params={"league": 12},
-        timeout=20,
-    )
-    r.raise_for_status()
-    seasons = [int(s) for s in r.json().get("response", [])]
-    current = current_nba_season_start_year()
-    valid = [s for s in seasons if s <= current]
-    return max(valid)
+    """
+    Determines the latest NBA season API-Sports supports.
+    Falls back safely if API-Sports does not return seasons.
+    """
+    try:
+        r = requests.get(
+            f"{API_BASE}/seasons",
+            headers={
+                "x-apisports-key": API_KEY,
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0",
+            },
+            params={"league": 12},
+            timeout=20,
+        )
+        r.raise_for_status()
+
+        seasons = [int(s) for s in r.json().get("response", [])]
+        current = current_nba_season_start_year()
+        valid = [s for s in seasons if s <= current]
+
+        if valid:
+            return max(valid)
+
+    except Exception:
+        pass  # swallow error and fall back safely
+
+    # ✅ SAFE fallback = last completed NBA season
+    return current_nba_season_start_year() - 1
+
 
 NBA_SEASON_START = current_nba_season_start_year()
 API_SEASON_YEAR = resolve_api_sports_season()
