@@ -62,7 +62,7 @@ NO_BET_MESSAGES = [
     "😴 This matchup ain't it",
 ]
 
-def parse_matchup(matchup):
+def parse_matchup(matchup: str):
     parts = matchup.upper().replace("@", "VS").replace("VS.", "VS").split("VS")
     parts = [p.strip() for p in parts if p.strip()]
     if len(parts) != 2:
@@ -105,7 +105,6 @@ def make_safe(chosen):
 
 def _nba_get(endpoint, params, retries=3, timeout=30):
     last_error = None
-
     for attempt in range(retries):
         try:
             r = requests.get(
@@ -116,19 +115,17 @@ def _nba_get(endpoint, params, retries=3, timeout=30):
             )
             r.raise_for_status()
             return r.json()
-
         except requests.exceptions.ReadTimeout as e:
             last_error = e
             time.sleep(1.5)
-
         except requests.exceptions.RequestException as e:
             last_error = e
             break
-
     raise RuntimeError("NBA Stats API temporarily unavailable") from last_error
 
 @st.cache_data(ttl=86400)
 def get_team_map():
+    # IMPORTANT: returns {} instead of throwing to keep UI stable
     try:
         j = _nba_get(
             "leaguedashteamstats",
@@ -145,7 +142,7 @@ def get_team_map():
 
     rs = j["resultSets"][0]
     df = pd.DataFrame(rs["rowSet"], columns=rs["headers"])
-    return {row["TEAM_ABBREVIATION"]: int(row["TEAM_ID"]) for _, row in df.iterrows()}
+    return {str(row["TEAM_ABBREVIATION"]).upper(): int(row["TEAM_ID"]) for _, row in df.iterrows()}
 
 @st.cache_data(ttl=21600)
 def get_team_roster(team_id):
@@ -163,15 +160,24 @@ def get_player_gamelog(player_id):
     return pd.DataFrame(rs["rowSet"], columns=rs["headers"])
 
 def last5_games(player_id):
-    df = get_player_gamelog(player_id).sort_values("GAME_DATE", ascending=False)
+    df = get_player_gamelog(player_id)
+    if df is None or df.empty:
+        return []
+
+    df = df.sort_values("GAME_DATE", ascending=False)
+
     out = []
     for _, r in df.iterrows():
+        # guard missing values
+        if pd.isna(r.get("MIN")) or pd.isna(r.get("PTS")) or pd.isna(r.get("REB")) or pd.isna(r.get("AST")):
+            continue
+
         out.append({
-            "min": int(r["MIN"]),
-            "pts": int(r["PTS"]),
-            "reb": int(r["REB"]),
-            "ast": int(r["AST"]),
-            "pra": int(r["PTS"]) + int(r["REB"]) + int(r["AST"]),
+            "min": int(float(r["MIN"])),
+            "pts": int(float(r["PTS"])),
+            "reb": int(float(r["REB"])),
+            "ast": int(float(r["AST"])),
+            "pra": int(float(r["PTS"])) + int(float(r["REB"])) + int(float(r["AST"])),
         })
         if len(out) == 5:
             break
@@ -185,58 +191,90 @@ matchup = st.text_input("Matchup (team acronyms)", value="LAL vs DAL")
 legs_n = st.slider("Final slip legs", 3, 5, 4)
 st.caption(f"Auto season detected: **{SEASON}**")
 
+# optional stability knob: reduces # of player calls
+max_players_per_team = st.slider(
+    "Stability limiter (max players checked per team)",
+    5, 20, 12,
+    help="Higher = more thorough but more likely to timeout on Streamlit Cloud."
+)
+
 run_btn = st.button("Auto-build best SGP", type="primary")
 
 # ============================
-# 🚀 EXECUTION BLOCK
+# 🚀 EXECUTION BLOCK (GUARDED)
 # ============================
 
 if run_btn:
     with st.spinner("Crunching the numbers....."):
-        team_a, team_b = parse_matchup(matchup)
-        team_map = get_team_map()
+        try:
+            team_a, team_b = parse_matchup(matchup)
+            team_map = get_team_map()
 
-        if not team_map:
-            st.error("🚫 NBA Stats API is temporarily unavailable. Please try again shortly.")
-            st.stop()
+            if not team_map:
+                st.error("🚫 NBA Stats API is temporarily unavailable. Try again in 30–60 seconds.")
+                st.stop()
 
-        candidates = []
+            # ✅ guard matchup abbreviations before indexing
+            if team_a not in team_map or team_b not in team_map:
+                st.error(f"Unknown team abbreviation(s): '{team_a}' / '{team_b}'. Example: LAL vs DAL")
+                st.stop()
 
-        for team in (team_a, team_b):
-            roster = get_team_roster(team_map[team])
+            candidates = []
 
-            for _, row in roster.iterrows():
-                last5 = last5_games(row["PLAYER_ID"])
+            for team in (team_a, team_b):
+                roster = get_team_roster(team_map[team])
 
-                if len(last5) != 5 or not minutes_gate(last5):
+                if roster is None or roster.empty:
                     continue
 
-                floors = build_floor_output(last5)
-                for _, f in floors.iterrows():
-                    candidates.append({
-                        "player": row["PLAYER"],
-                        "team": team,
-                        "stat": f["stat"],
-                        "line": f["line"],
-                        "pref": f["pref"],
-                        "variance": f["variance"],
-                    })
+                # ✅ stability: limit number of roster rows to reduce API calls/timeouts
+                roster = roster.head(int(max_players_per_team))
 
-        candidates.sort(key=lambda x: (x["pref"], x["variance"]))
+                for _, row in roster.iterrows():
+                    player_id = row.get("PLAYER_ID")
+                    player_name = row.get("PLAYER")
 
-        if len(candidates) < 3:
-            st.warning(random.choice(NO_BET_MESSAGES))
-            st.stop()
+                    if pd.isna(player_id) or pd.isna(player_name):
+                        continue
 
-        final = candidates[:legs_n]
-        safe = make_safe(final)
+                    last5 = last5_games(int(player_id))
 
-        st.success("✅ SGP built successfully")
+                    if len(last5) != 5:
+                        continue
+                    if not minutes_gate(last5):
+                        continue
 
-        st.subheader("🔥 Final Slip")
-        for p in final:
-            st.write(f"{p['player']} {p['stat']} ≥ {p['line']} ({p['team']})")
+                    floors = build_floor_output(last5)
+                    for _, f in floors.iterrows():
+                        candidates.append({
+                            "player": str(player_name),
+                            "team": team,
+                            "stat": f["stat"],
+                            "line": int(f["line"]),
+                            "pref": int(f["pref"]),
+                            "variance": int(f["variance"]),
+                        })
 
-        st.subheader("🛡 SAFE Slip")
-        for p in safe:
-            st.write(f"{p['player']} {p['stat']} ≥ {p['line']} ({p['team']})")
+            candidates.sort(key=lambda x: (x["pref"], x["variance"]))
+
+            if len(candidates) < 3:
+                st.warning(random.choice(NO_BET_MESSAGES))
+                st.stop()
+
+            final = candidates[:int(legs_n)]
+            safe = make_safe(final)
+
+            st.success("✅ SGP built successfully")
+
+            st.subheader("🔥 Final Slip")
+            for p in final:
+                st.write(f"{p['player']} {p['stat']} ≥ {p['line']} ({p['team']})")
+
+            st.subheader("🛡 SAFE Slip")
+            for p in safe:
+                st.write(f"{p['player']} {p['stat']} ≥ {p['line']} ({p['team']})")
+
+        except Exception as e:
+            # ✅ prevents hard crash (and thus prevents front-end bundle failures)
+            st.error("⚠️ The app hit a temporary error while loading NBA Stats data. Try again in a minute.")
+            st.exception(e)
