@@ -5,11 +5,8 @@ import pandas as pd
 import streamlit as st
 from datetime import date, timedelta
 
-API_KEY = st.secrets.get("BALLDONTLIE_API_KEY", os.getenv("BALLDONTLIE_API_KEY"))
 BASE = "https://api.balldontlie.io/v1"
-if not API_KEY:
-    st.error("BALLDONTLIE_API_KEY not found in Streamlit Secrets.")
-    st.stop()
+
 
 
 st.set_page_config(page_title="Refined NBA SGP Builder (Option A)", layout="centered")
@@ -18,26 +15,22 @@ st.set_page_config(page_title="Refined NBA SGP Builder (Option A)", layout="cent
 # ----------------------------
 # Basic guards
 # ----------------------------
-def _require_key():
-    if not API_KEY or API_KEY in ("YOUR_API_KEY", "YOUR_API_KEY_HERE"):
-        st.error("Missing BALLDONTLIE_API_KEY. Set it as an environment variable and restart Streamlit.")
-        st.stop()
+
 
 
 # ----------------------------
 # API helpers
 # ----------------------------
 @st.cache_data(ttl=300)
-def search_players(search_name: str, per_page: int = 25):
-    r = requests.get(
+def r = requests.get(
     f"{BASE}/players",
     params={
         "search": search_name,
         "per_page": per_page,
-        "api_key": API_KEY,
     },
     timeout=20,
 )
+
 
 
     r.raise_for_status()
@@ -55,9 +48,10 @@ def get_player_best_match(search_name: str) -> dict:
 def get_teams():
     r = requests.get(
     f"{BASE}/teams",
-    params={"api_key": API_KEY},
     timeout=20,
 )
+
+
 
     r.raise_for_status()
     data = r.json()["data"]
@@ -73,7 +67,7 @@ def fetch_stats(player_id: int, start: str, end: str, per_page: int = 100):
     "per_page": per_page,
     "postseason": "false",
     "period": 0,
-    "api_key": API_KEY,
+    
 }
 
     r = requests.get(f"{BASE}/stats", params=params, timeout=20)
@@ -332,7 +326,6 @@ def make_safe(chosen: list[dict]) -> list[dict]:
 st.title("Refined Floor-Based NBA SGP Builder (Option A)")
 st.caption("Input: 'LAL vs DAL' + players • Output: 3–5 legs + SAFE • Last 5 only • Minutes gate • 5/5 • Floor lines • Max 1 opposing player")
 
-_require_key()
 
 matchup = st.text_input("Game matchup (Option A)", value="LAL vs DAL")
 
