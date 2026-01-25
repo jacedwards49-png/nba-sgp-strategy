@@ -27,8 +27,8 @@ if not API_KEY:
     st.stop()
 
 API_BASES = [
-    "https://v1.basketball.api-sports.io",
-    "https://v2.nba.api-sports.io",
+    "https://v1.basketball.api-sports.io",  # Basketball API
+    "https://v2.nba.api-sports.io",         # NBA v2 API
 ]
 
 HEADERS = {
@@ -37,10 +37,11 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0",
 }
 
-LEAGUE_ID = 12  # NBA on API-Sports
+LEAGUE_ID_NUMERIC = 12   # common NBA league id on Basketball API
+LEAGUE_ID_STRING = "standard"  # common league value on NBA v2 API
 
 # ============================================================
-# SEASON RESOLUTION (AUTO + SAFE)
+# SEASON RESOLUTION (AUTO + SAFE, never future)
 # ============================================================
 
 def current_nba_season_start_year() -> int:
@@ -49,25 +50,45 @@ def current_nba_season_start_year() -> int:
 
 @st.cache_data(ttl=86400)
 def resolve_api_sports_season() -> int:
+    """
+    Calls /seasons and picks the latest season <= current NBA season start year.
+    If /seasons fails or returns nothing, falls back safely to (current - 1).
+    """
     current = current_nba_season_start_year()
-    try:
-        for base in API_BASES:
+
+    last_error = None
+    for base in API_BASES:
+        try:
             r = requests.get(
                 f"{base}/seasons",
                 headers=HEADERS,
-                params={"league": LEAGUE_ID},
+                params={"league": LEAGUE_ID_NUMERIC},
                 timeout=20,
             )
-            if r.status_code == 200:
-                seasons = [int(s) for s in r.json().get("response", [])]
-                valid = [s for s in seasons if s <= current]
-                if valid:
-                    return max(valid)
-    except Exception:
-        pass
-    return current - 1  # safe fallback
+            if r.status_code != 200:
+                last_error = RuntimeError(f"{base}/seasons HTTP {r.status_code}: {r.text[:200]}")
+                continue
+
+            j = r.json()
+            seasons_raw = j.get("response", [])
+            seasons = []
+            for s in seasons_raw:
+                try:
+                    seasons.append(int(s))
+                except Exception:
+                    pass
+
+            valid = [s for s in seasons if s <= current]
+            if valid:
+                return max(valid)
+        except Exception as e:
+            last_error = e
+
+    # safe fallback (never future)
+    return current - 1
 
 API_SEASON_YEAR = resolve_api_sports_season()
+
 st.caption(
     f"NBA season: **{current_nba_season_start_year()}–{str(current_nba_season_start_year()+1)[-2:]}** "
     f"(API data: **{API_SEASON_YEAR}**)"
@@ -105,65 +126,133 @@ def make_safe(chosen):
 # API HELPERS (RETRY-SAFE)
 # ============================================================
 
-def api_get(path, params, retries=3):
+def api_get(path, params, retries=3, timeout=25):
+    """
+    Tries both API_BASES. Retries on 429/5xx/timeouts.
+    Returns (json, base_used, final_url, final_params)
+    """
     last_error = None
+
     for base in API_BASES:
         url = f"{base}/{path.lstrip('/')}"
-        for _ in range(retries):
+        for attempt in range(retries):
             try:
-                r = requests.get(url, headers=HEADERS, params=params, timeout=25)
-                if r.status_code in (429, 500, 502, 503):
-                    time.sleep(1.5)
+                r = requests.get(url, headers=HEADERS, params=params, timeout=timeout)
+
+                # retryable
+                if r.status_code in (429, 500, 502, 503, 504):
+                    time.sleep(1.25 + 0.5 * attempt)
                     continue
-                r.raise_for_status()
-                return r.json()
+
+                # non-retryable
+                if r.status_code != 200:
+                    last_error = RuntimeError(f"{url} HTTP {r.status_code}: {r.text[:250]}")
+                    break
+
+                j = r.json()
+
+                # API-Sports sometimes returns errors object
+                if isinstance(j, dict) and j.get("errors"):
+                    # e.g. {"errors":{"token":"Missing application key"...}}
+                    last_error = RuntimeError(f"{url} API errors: {str(j.get('errors'))[:250]}")
+                    break
+
+                return j, base, url, params
+
+            except requests.exceptions.ReadTimeout as e:
+                last_error = e
+                time.sleep(1.25 + 0.5 * attempt)
             except Exception as e:
                 last_error = e
+                break
+
     raise RuntimeError("API-Sports request failed") from last_error
 
 # ============================================================
-# TEAM DROPDOWN DATA
+# TEAM DROPDOWN DATA (FIXED)
 # ============================================================
 
 @st.cache_data(ttl=86400)
 def get_team_display_list():
-    j = api_get("teams", {"league": LEAGUE_ID})
-    out = []
-    for t in j.get("response", []):
-        team = t.get("team", t)
-        if team.get("code") and team.get("id"):
-            out.append({
-                "code": team["code"].upper(),
-                "team_id": int(team["id"]),
-                "name": team["name"],
-                "logo": team.get("logo"),
-                "label": f'{team["name"]} ({team["code"].upper()})',
-            })
-    return sorted(out, key=lambda x: x["name"])
+    """
+    IMPORTANT FIX:
+    - 'teams' usually requires season
+    - NBA v2 may want league='standard'
+    We try a few known-good param sets and take the first non-empty response.
+    """
+    attempts = [
+        # Basketball base style
+        ("teams", {"league": LEAGUE_ID_NUMERIC, "season": API_SEASON_YEAR}),
+        ("teams", {"season": API_SEASON_YEAR, "league": LEAGUE_ID_NUMERIC}),
+        # NBA v2 style (often uses 'standard')
+        ("teams", {"league": LEAGUE_ID_STRING, "season": API_SEASON_YEAR}),
+        ("teams", {"season": API_SEASON_YEAR, "league": LEAGUE_ID_STRING}),
+        # last resort (some accounts return teams without league, but still season)
+        ("teams", {"season": API_SEASON_YEAR}),
+    ]
 
-teams = get_team_display_list()
+    debug_attempts = []
+
+    for path, params in attempts:
+        try:
+            j, base, url, used_params = api_get(path, params)
+            resp = j.get("response", []) if isinstance(j, dict) else []
+            debug_attempts.append(
+                {"base": base, "path": path, "params": used_params, "resp_len": len(resp)}
+            )
+            if resp:
+                out = []
+                for t in resp:
+                    team = t.get("team", t) if isinstance(t, dict) else {}
+                    tid = team.get("id")
+                    name = team.get("name")
+                    code = (team.get("code") or team.get("abbreviation") or "").upper()
+                    logo = team.get("logo")
+
+                    if tid and name and code:
+                        out.append(
+                            {
+                                "code": code,
+                                "team_id": int(tid),
+                                "name": str(name),
+                                "logo": logo,
+                                "label": f"{name} ({code})",
+                            }
+                        )
+
+                out = sorted(out, key=lambda x: x["name"])
+                if out:
+                    return out, debug_attempts
+        except Exception as e:
+            debug_attempts.append({"path": path, "params": params, "error": str(e)[:250]})
+
+    return [], debug_attempts
+
+# ============================================================
+# UI — CONTROLS (keep exactly as your current UI)
+# ============================================================
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    legs_n = st.slider("Ideal legs (3–5)", 3, 5, 4)
+with col2:
+    risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"], index=1)
+with col3:
+    show_debug = st.toggle("Show debug", False)
+
+teams, teams_debug = get_team_display_list()
 if not teams:
     st.error("Teams unavailable from API-Sports.")
+    if show_debug:
+        st.write("Tried these team fetch attempts:")
+        st.json(teams_debug)
     st.stop()
 
 team_lookup = {t["label"]: t for t in teams}
 labels = list(team_lookup.keys())
 
 # ============================================================
-# TEMP DEBUG — VERIFY TEAMS API RESPONSE
-# ============================================================
-
-with st.expander("DEBUG – Raw API-Sports /teams response"):
-    try:
-        raw = api_get("teams", {"league": 12})
-        st.write("Keys:", raw.keys() if isinstance(raw, dict) else type(raw))
-        st.json(raw)
-    except Exception as e:
-        st.exception(e)
-
-
-# ============================================================
-# UI — TEAM DROPDOWNS
+# UI — TEAM DROPDOWNS (same layout you had)
 # ============================================================
 
 colA, colB, colC = st.columns([5, 1, 5])
@@ -180,21 +269,11 @@ team_b = team_lookup[team_b_label]
 
 logo1, logo2 = st.columns(2)
 with logo1:
-    st.image(team_a["logo"], width=80)
+    if team_a.get("logo"):
+        st.image(team_a["logo"], width=80)
 with logo2:
-    st.image(team_b["logo"], width=80)
-
-# ============================================================
-# CONTROLS
-# ============================================================
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    legs_n = st.slider("Ideal legs (3–5)", 3, 5, 4)
-with col2:
-    risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"], index=1)
-with col3:
-    show_debug = st.toggle("Show debug", False)
+    if team_b.get("logo"):
+        st.image(team_b["logo"], width=80)
 
 run_btn = st.button("Auto-build best SGP", type="primary")
 
@@ -205,20 +284,26 @@ run_btn = st.button("Auto-build best SGP", type="primary")
 def parse_minutes(val):
     if not val:
         return 0
-    s = str(val)
-    return int(float(s.split(":")[0])) if ":" in s else int(float(s))
+    s = str(val).strip()
+    if not s:
+        return 0
+    try:
+        return int(float(s.split(":")[0])) if ":" in s else int(float(s))
+    except Exception:
+        return 0
 
 @st.cache_data(ttl=1800)
-def get_last_games(team_id):
-    j = api_get("games", {"league": LEAGUE_ID, "season": API_SEASON_YEAR, "team": team_id})
-    games = j.get("response", [])
-    games = sorted(games, key=lambda g: g.get("date", ""), reverse=True)
+def get_last_games(team_id: int):
+    # some APIs want league numeric; keep numeric first
+    j, _, _, _ = api_get("games", {"league": LEAGUE_ID_NUMERIC, "season": API_SEASON_YEAR, "team": team_id})
+    games = j.get("response", []) if isinstance(j, dict) else []
+    games = sorted(games, key=lambda g: (g.get("date") or ""), reverse=True)
     return games[:5]
 
 @st.cache_data(ttl=1800)
-def get_game_stats(game_id, team_id):
-    j = api_get("players/statistics", {"game": game_id, "team": team_id})
-    return j.get("response", [])
+def get_game_stats(game_id: int, team_id: int):
+    j, _, _, _ = api_get("players/statistics", {"game": game_id, "team": team_id})
+    return j.get("response", []) if isinstance(j, dict) else []
 
 # ============================================================
 # EXECUTION
@@ -237,22 +322,25 @@ if run_btn:
                     gid = g.get("id")
                     if not gid:
                         continue
-                    rows = get_game_stats(gid, team["team_id"])
+
+                    rows = get_game_stats(int(gid), int(team["team_id"]))
                     for r in rows:
-                        p = r.get("player", {})
+                        p = r.get("player", {}) if isinstance(r, dict) else {}
                         pid = p.get("id")
-                        name = p.get("name")
-                        s = r.get("statistics", {})
+                        name = p.get("name") or "Unknown"
+
+                        stats = r.get("statistics", {}) if isinstance(r, dict) else {}
                         if not pid:
                             continue
 
                         log = {
-                            "min": parse_minutes(s.get("minutes")),
-                            "pts": int(s.get("points", 0)),
-                            "reb": int(s.get("totReb", 0)),
-                            "ast": int(s.get("assists", 0)),
+                            "min": parse_minutes(stats.get("minutes") or stats.get("min")),
+                            "pts": int(stats.get("points") or stats.get("pts") or 0),
+                            "reb": int(stats.get("totReb") or stats.get("reb") or 0),
+                            "ast": int(stats.get("assists") or stats.get("ast") or 0),
                         }
                         log["pra"] = log["pts"] + log["reb"] + log["ast"]
+
                         player_logs.setdefault(pid, {"name": name, "team": team["code"], "games": []})
                         player_logs[pid]["games"].append(log)
 
@@ -263,14 +351,16 @@ if run_btn:
 
                     for stat in PREF_ORDER:
                         vals = [g[stat.lower()] for g in last5]
-                        candidates.append({
-                            "player": info["name"],
-                            "team": info["team"],
-                            "stat": stat,
-                            "line": floor_line(vals),
-                            "pref": PREF_ORDER.index(stat),
-                            "variance": VARIANCE_RANK[stat],
-                        })
+                        candidates.append(
+                            {
+                                "player": info["name"],
+                                "team": info["team"],
+                                "stat": stat,
+                                "line": floor_line(vals),
+                                "pref": PREF_ORDER.index(stat),
+                                "variance": VARIANCE_RANK[stat],
+                            }
+                        )
 
             candidates.sort(key=lambda x: (x["pref"], x["variance"]))
 
@@ -278,7 +368,7 @@ if run_btn:
                 st.warning(random.choice(NO_BET_MESSAGES))
                 st.stop()
 
-            legs = 3 if risk_mode == "Safe" else 5 if risk_mode == "Higher-risk" else legs_n
+            legs = 3 if risk_mode == "Safe" else 5 if risk_mode == "Higher-risk" else int(legs_n)
             final = candidates[:legs]
             safe = make_safe(final)
 
@@ -293,6 +383,9 @@ if run_btn:
                 st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
 
             if show_debug:
+                st.subheader("Debug: team fetch attempts")
+                st.json(teams_debug)
+                st.subheader("Debug: candidates (top 50)")
                 st.dataframe(pd.DataFrame(candidates).head(50), use_container_width=True)
 
         except Exception as e:
