@@ -456,7 +456,7 @@ if run_btn:
                         player_logs[pid]["games"].append(log)
 
                 # Evaluate players (must have 5 games + minutes gate)
-                for info in player_logs.values():
+    for info in player_logs.values():
     last5 = info["games"][:5]
 
     # Enforce Option A: must have exactly 5 games + minutes gate
