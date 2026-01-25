@@ -175,58 +175,40 @@ def api_get(path, params, retries=3, timeout=25):
 @st.cache_data(ttl=86400)
 def get_team_display_list():
     """
-    IMPORTANT FIX:
-    - 'teams' usually requires season
-    - NBA v2 may want league='standard'
-    We try a few known-good param sets and take the first non-empty response.
+    NBA teams derived from STANDINGS.
+    The /teams endpoint is unreliable for NBA on API-Sports.
     """
-    attempts = [
-        # Basketball base style
-        ("teams", {"league": LEAGUE_ID_NUMERIC, "season": API_SEASON_YEAR}),
-        ("teams", {"season": API_SEASON_YEAR, "league": LEAGUE_ID_NUMERIC}),
-        # NBA v2 style (often uses 'standard')
-        ("teams", {"league": LEAGUE_ID_STRING, "season": API_SEASON_YEAR}),
-        ("teams", {"season": API_SEASON_YEAR, "league": LEAGUE_ID_STRING}),
-        # last resort (some accounts return teams without league, but still season)
-        ("teams", {"season": API_SEASON_YEAR}),
-    ]
+    j = api_get(
+        "standings",
+        {
+            "league": LEAGUE_ID,
+            "season": API_SEASON_YEAR,
+        }
+    )
 
-    debug_attempts = []
+    standings = j.get("response", []) if isinstance(j, dict) else []
 
-    for path, params in attempts:
-        try:
-            j, base, url, used_params = api_get(path, params)
-            resp = j.get("response", []) if isinstance(j, dict) else []
-            debug_attempts.append(
-                {"base": base, "path": path, "params": used_params, "resp_len": len(resp)}
+    out = []
+    for entry in standings:
+        team = entry.get("team", {})
+        tid = team.get("id")
+        name = team.get("name")
+        code = (team.get("code") or "").upper()
+        logo = team.get("logo")
+
+        if tid and name and code:
+            out.append(
+                {
+                    "code": code,
+                    "team_id": int(tid),
+                    "name": name,
+                    "logo": logo,
+                    "label": f"{name} ({code})",
+                }
             )
-            if resp:
-                out = []
-                for t in resp:
-                    team = t.get("team", t) if isinstance(t, dict) else {}
-                    tid = team.get("id")
-                    name = team.get("name")
-                    code = (team.get("code") or team.get("abbreviation") or "").upper()
-                    logo = team.get("logo")
 
-                    if tid and name and code:
-                        out.append(
-                            {
-                                "code": code,
-                                "team_id": int(tid),
-                                "name": str(name),
-                                "logo": logo,
-                                "label": f"{name} ({code})",
-                            }
-                        )
+    return sorted(out, key=lambda x: x["name"])
 
-                out = sorted(out, key=lambda x: x["name"])
-                if out:
-                    return out, debug_attempts
-        except Exception as e:
-            debug_attempts.append({"path": path, "params": params, "error": str(e)[:250]})
-
-    return [], debug_attempts
 
 # ============================================================
 # UI — CONTROLS (keep exactly as your current UI)
