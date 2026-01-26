@@ -482,25 +482,43 @@ if run_btn:
                     "team": info["team"]
                 })
 
-                for stat in PREF_ORDER:
-                    key = stat.lower()
-                    values = [g[key] for g in last5]
+                is_near_miss_minutes = (
+    len(last5) == 5 and not minutes_gate(last5)
+)
 
-                    if any(v is None for v in values):
-                        continue
+for stat in PREF_ORDER:
+    key = stat.lower()
+    values = [g[key] for g in last5]
 
-                    floor = int(min(values) * 0.90)
-                    if floor <= 0:
-                        continue
+    if any(v is None for v in values):
+        continue
 
-                    candidates.append({
-                        "player": info["name"],
-                        "team": info["team"],
-                        "stat": stat,
-                        "line": floor,
-                        "pref": PREF_ORDER.index(stat),
-                        "variance": VARIANCE_RANK[stat],
-                    })
+    floor = int(min(values) * 0.90)
+    if floor <= 0:
+        continue
+
+    # Normal qualified candidate
+    if minutes_gate(last5):
+        candidates.append({
+            "player": info["name"],
+            "team": info["team"],
+            "stat": stat,
+            "line": floor,
+            "pref": PREF_ORDER.index(stat),
+            "variance": VARIANCE_RANK[stat],
+        })
+
+    # Near-miss candidate
+    elif is_near_miss_minutes:
+        near_miss_candidates.append({
+            "player": info["name"],
+            "team": info["team"],
+            "stat": stat,
+            "line": floor,
+            "variance": VARIANCE_RANK[stat],
+            "score": near_miss_score(last5, stat, floor),
+        })
+
 
         # ----------------------------
         # NO VALID CANDIDATES
