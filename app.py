@@ -280,6 +280,9 @@ main_team = choose_main_team(
     team_a["code"],
     team_b["code"]
 )
+
+
+
 opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
 
 st.markdown("### Team constraint")
