@@ -456,124 +456,37 @@ if run_btn:
                         player_logs[pid]["games"].append(log)
 
                 # Evaluate players (must have 5 games + minutes gate)
-for info in player_logs.values():
-    
-        last5 = info["last5"]
+                for info in player_logs.values():
 
-        # Gate: must have exactly 5 games + minutes check
-        if len(last5) != 5 or not minutes_gate(last5):
-            continue
+                    last5 = info["games"]
 
-        for stat in PREF_ORDER:
-            values = [g.get(stat, 0) for g in last5]
+                    # Must have exactly 5 games + minutes gate
+                    if len(last5) != 5 or not minutes_gate(last5):
+                        continue
 
-            # Require stat present in all 5 games
-            if any(v is None for v in values):
-                continue
-
-            floor = int(min(values) * 0.90)
-
-            if floor <= 0:
-                continue
-
-            leg = {
-                "player": info["player_name"],
-                "team": info["team"],
-                "stat": stat,
-                "line": floor,
-                "values": values,
-            }
-
-            candidate_legs.append(leg)
-
-    except Exception as e:
-        # Fail silently on bad player data
-        continue
-
-
-
-                    eligible_players.append({"player": info["name"], "team": info["team"]})
+                    eligible_players.append(
+                        {"player": info["name"], "team": info["team"]}
+                    )
 
                     for stat in PREF_ORDER:
-                        key = stat.lower()
-                        vals = [g[key] for g in last5]
+                        key = stat.lower()  # pts / reb / ast / pra
+                        values = [g[key] for g in last5]
+
+                        # Require stat present in all 5 games
+                        if any(v is None for v in values):
+                            continue
+
+                        floor = int(min(values) * 0.90)
+                        if floor <= 0:
+                            continue
+
                         candidates.append(
                             {
                                 "player": info["name"],
                                 "team": info["team"],
                                 "stat": stat,
-                                "line": floor_line(vals),
+                                "line": floor,
                                 "pref": PREF_ORDER.index(stat),
                                 "variance": VARIANCE_RANK[stat],
                             }
                         )
-
-            if len(eligible_players) == 0 or len(candidates) < 3:
-    st.warning(random.choice(NO_BET_MESSAGES))
-
-    if near_miss_candidates:
-        st.subheader("🟡 Closest Possible Parlay (did not fully qualify)")
-
-        # Rank by lowest variance, then closest to hitting
-        near_miss_candidates.sort(
-            key=lambda x: (x["variance"], -x["score"])
-        )
-
-        fallback_legs = near_miss_candidates[:mode_to_legs(risk_mode, legs_n)]
-
-        for p in fallback_legs:
-            st.write(
-                f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]}) '
-                f'(miss score: {round(p["score"], 2)})'
-            )
-
-    st.stop()
-
-
-            candidates.sort(key=lambda x: (x["pref"], x["variance"], x["player"]))
-
-            main_team = choose_main_team(eligible_players, team_a["code"], team_b["code"])
-            opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
-
-            legs = mode_to_legs(risk_mode, legs_n)
-            chosen = build_sgp_with_constraints(
-                candidates,
-                team_a["code"],
-                team_b["code"],
-                main_team=main_team,
-                n_legs=legs,
-            )
-
-            if len(chosen) < 3:
-                st.warning(random.choice(NO_BET_MESSAGES))
-                if show_debug:
-                    st.subheader("Debug: API calls")
-                    st.json(all_debug)
-                st.stop()
-
-            safe = make_safe(chosen)
-
-            st.success("✅ SGP built successfully")
-            st.markdown("### Team constraint")
-            st.write(f"Main side inferred: **{main_team}** (max **1** opposing player from **{opp_team}**)")
-
-            st.subheader("🔥 Final Slip")
-            for p in chosen:
-                st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
-
-            st.subheader("🛡 SAFE Slip")
-            for p in safe:
-                st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
-
-            if show_debug:
-                st.subheader("Debug: eligible players")
-                st.dataframe(pd.DataFrame(eligible_players), use_container_width=True)
-                st.subheader("Debug: candidates (top 50)")
-                st.dataframe(pd.DataFrame(candidates).head(50), use_container_width=True)
-                st.subheader("Debug: API calls (raw)")
-                st.json(all_debug)
-
-        except Exception as e:
-            st.warning("⚠️ Temporary API issue. Try again shortly.")
-            if show_debug:
-                st.exception(e)
