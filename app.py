@@ -405,161 +405,167 @@ def get_player_game_stats(game_id: int, team_id: int):
 
 if run_btn:
     with st.spinner("Crunching the numbers....."):
-        
-            candidates = []
-            eligible_players = []
-            near_miss_candidates = []
 
+        candidates = []
+        eligible_players = []
+        near_miss_candidates = []
 
-            all_debug = {"teams": teams_debug, "last_games": {}, "player_stats": {}}
+        all_debug = {
+            "teams": teams_debug,
+            "last_games": {},
+            "player_stats": {}
+        }
 
-            for team in (team_a, team_b):
-                games, games_dbg = get_last_games(int(team["team_id"]))
-                all_debug["last_games"][team["code"]] = games_dbg
+        # ----------------------------
+        # COLLECT PLAYER GAME LOGS
+        # ----------------------------
+        for team in (team_a, team_b):
+            games, games_dbg = get_last_games(int(team["team_id"]))
+            all_debug["last_games"][team["code"]] = games_dbg
 
-                if len(games) < 5:
-                    continue  # can't satisfy 5/5 gate
+            if len(games) < 5:
+                continue
 
-                player_logs = {}
+            player_logs = {}
 
-                for g in games:
-                    if not isinstance(g, dict):
-                        continue
-                    gid = g.get("id")
-                    if not gid:
-                        continue
+            for g in games:
+                if not isinstance(g, dict):
+                    continue
 
-                    rows, stats_dbg = get_player_game_stats(int(gid), int(team["team_id"]))
-                    all_debug["player_stats"][f"{team['code']}_{gid}"] = stats_dbg
+                gid = g.get("id")
+                if not gid:
+                    continue
 
-                    for r in rows:
-                        if not isinstance(r, dict):
-                            continue
+                rows, stats_dbg = get_player_game_stats(
+                    int(gid),
+                    int(team["team_id"])
+                )
+                all_debug["player_stats"][f"{team['code']}_{gid}"] = stats_dbg
 
-                        p = r.get("player", {}) or {}
-                        pid = p.get("id")
-                        name = p.get("name") or "Unknown"
-                        if not pid:
-                            continue
-
-                        stats = r.get("statistics", {}) or {}
-
-                        log = {
-                            "min": parse_minutes(stats.get("minutes") or stats.get("min")),
-                            "pts": int(stats.get("points") or stats.get("pts") or 0),
-                            "reb": int(stats.get("totReb") or stats.get("reb") or 0),
-                            "ast": int(stats.get("assists") or stats.get("ast") or 0),
-                        }
-                        log["pra"] = log["pts"] + log["reb"] + log["ast"]
-
-                        player_logs.setdefault(pid, {"name": name, "team": team["code"], "games": []})
-                        player_logs[pid]["games"].append(log)
-
-                # Evaluate players (must have 5 games + minutes gate)
-                for info in player_logs.values():
-
-                    last5 = info["games"]
-
-                    # Must have exactly 5 games + minutes gate
-                    if len(last5) != 5 or not minutes_gate(last5):
+                for r in rows:
+                    if not isinstance(r, dict):
                         continue
 
-                    eligible_players.append(
-                        {"player": info["name"], "team": info["team"]}
+                    p = r.get("player", {}) or {}
+                    pid = p.get("id")
+                    name = p.get("name") or "Unknown"
+                    if not pid:
+                        continue
+
+                    stats = r.get("statistics", {}) or {}
+
+                    log = {
+                        "min": parse_minutes(stats.get("minutes") or stats.get("min")),
+                        "pts": int(stats.get("points") or stats.get("pts") or 0),
+                        "reb": int(stats.get("totReb") or stats.get("reb") or 0),
+                        "ast": int(stats.get("assists") or stats.get("ast") or 0),
+                    }
+                    log["pra"] = log["pts"] + log["reb"] + log["ast"]
+
+                    player_logs.setdefault(
+                        pid,
+                        {"name": name, "team": team["code"], "games": []}
                     )
+                    player_logs[pid]["games"].append(log)
 
-                    for stat in PREF_ORDER:
-                        key = stat.lower()  # pts / reb / ast / pra
-                        values = [g[key] for g in last5]
+            # ----------------------------
+            # EVALUATE PLAYERS
+            # ----------------------------
+            for info in player_logs.values():
+                last5 = info["games"]
 
-                        # Require stat present in all 5 games
-                        if any(v is None for v in values):
-                            continue
+                if len(last5) != 5 or not minutes_gate(last5):
+                    continue
 
-                        floor = int(min(values) * 0.90)
-                        if floor <= 0:
-                            continue
+                eligible_players.append({
+                    "player": info["name"],
+                    "team": info["team"]
+                })
 
-                        candidates.append(
-                            {
-                                "player": info["name"],
-                                "team": info["team"],
-                                "stat": stat,
-                                "line": floor,
-                                "pref": PREF_ORDER.index(stat),
-                                "variance": VARIANCE_RANK[stat],
-                            }
-                        )
+                for stat in PREF_ORDER:
+                    key = stat.lower()
+                    values = [g[key] for g in last5]
 
-# ============================================================
-# FINAL SELECTION + OUTPUT
-# ============================================================
+                    if any(v is None for v in values):
+                        continue
 
-# No valid candidates
-if len(candidates) < 3:
-    st.warning(random.choice(NO_BET_MESSAGES))
-    if show_debug:
-        st.subheader("Debug: No valid candidates")
-        st.json(all_debug)
-    st.stop()
+                    floor = int(min(values) * 0.90)
+                    if floor <= 0:
+                        continue
 
-# Sort candidates by preference → variance → player
-candidates.sort(key=lambda x: (x["pref"], x["variance"], x["player"]))
+                    candidates.append({
+                        "player": info["name"],
+                        "team": info["team"],
+                        "stat": stat,
+                        "line": floor,
+                        "pref": PREF_ORDER.index(stat),
+                        "variance": VARIANCE_RANK[stat],
+                    })
 
-# Determine main team
-main_team = choose_main_team(
-    eligible_players,
-    team_a["code"],
-    team_b["code"]
-)
-opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
+        # ----------------------------
+        # NO VALID CANDIDATES
+        # ----------------------------
+        if len(candidates) < 3:
+            st.warning(random.choice(NO_BET_MESSAGES))
+            if show_debug:
+                st.subheader("Debug: No valid candidates")
+                st.json(all_debug)
+            st.stop()
 
-# Determine number of legs
-legs = mode_to_legs(risk_mode, legs_n)
+        # ----------------------------
+        # BUILD FINAL SGP
+        # ----------------------------
+        candidates.sort(key=lambda x: (x["pref"], x["variance"], x["player"]))
 
-# Build SGP with constraints
-chosen = build_sgp_with_constraints(
-    candidates,
-    team_a["code"],
-    team_b["code"],
-    main_team=main_team,
-    n_legs=legs,
-)
+        main_team = choose_main_team(
+            eligible_players,
+            team_a["code"],
+            team_b["code"]
+        )
+        opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
 
-# Safety check
-if len(chosen) < 3:
-    st.warning(random.choice(NO_BET_MESSAGES))
-    if show_debug:
-        st.subheader("Debug: Constraint failure")
-        st.json(all_debug)
-    st.stop()
+        legs = mode_to_legs(risk_mode, legs_n)
 
-safe = make_safe(chosen)
+        chosen = build_sgp_with_constraints(
+            candidates,
+            team_a["code"],
+            team_b["code"],
+            main_team=main_team,
+            n_legs=legs,
+        )
 
-# ============================================================
-# DISPLAY RESULTS
-# ============================================================
+        if len(chosen) < 3:
+            st.warning(random.choice(NO_BET_MESSAGES))
+            if show_debug:
+                st.subheader("Debug: Constraint failure")
+                st.json(all_debug)
+            st.stop()
 
-st.success("✅ SGP built successfully")
+        safe = make_safe(chosen)
 
-st.markdown("### Team constraint")
-st.write(f"Main side inferred: **{main_team}** (max **1** opposing player from **{opp_team}**)")
+        # ----------------------------
+        # DISPLAY RESULTS
+        # ----------------------------
+        st.success("✅ SGP built successfully")
 
-st.subheader("🔥 Final Slip")
-for p in chosen:
-    st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+        st.markdown("### Team constraint")
+        st.write(
+            f"Main side inferred: **{main_team}** "
+            f"(max **1** opposing player from **{opp_team}**)"
+        )
 
-st.subheader("🛡 SAFE Slip")
-for p in safe:
-    st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+        st.subheader("🔥 Final Slip")
+        for p in chosen:
+            st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
 
-if show_debug:
-    st.subheader("Debug: Eligible players")
-    st.dataframe(pd.DataFrame(eligible_players), use_container_width=True)
+        st.subheader("🛡 SAFE Slip")
+        for p in safe:
+            st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
 
-    st.subheader("Debug: Candidates (top 50)")
-    st.dataframe(pd.DataFrame(candidates).head(50), use_container_width=True)
-
-    st.subheader("Debug: API calls")
-    st.json(all_debug)
-
+        if show_debug:
+            st.subheader("Debug: Eligible players")
+            st.dataframe(pd.DataFrame(eligible_players))
+            st.subheader("Debug: Candidates (top 50)")
+            st.dataframe(pd.DataFrame(candidates).head(50))
+            st.subheader("Debug: API calls")
+            st.json(all_debug)
