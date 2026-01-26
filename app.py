@@ -53,10 +53,22 @@ PREF_ORDER = ["REB", "AST", "PRA", "PTS"]  # PTS last resort
 
 def minutes_gate(last5):
     mins = [g["min"] for g in last5]
+    if len(mins) != 5:
+        return False
+
+    # Original strict gates
+    if all(m >= 28 for m in mins):
+        return True
+    if sum(m > 30 for m in mins) >= 4:
+        return True
+
+    # NEW: one soft miss allowed (26–27 min)
+    sorted_mins = sorted(mins)
     return (
-        len(mins) == 5
-        and (all(m >= 28 for m in mins) or sum(m > 30 for m in mins) >= 4)
+        sorted_mins[0] >= 26 and
+        all(m >= 28 for m in sorted_mins[1:])
     )
+
 
 def floor_line(values):
     return int(math.floor(min(values) * 0.90)) if values else 0
