@@ -270,18 +270,16 @@ if run_btn:
         safe = make_safe(chosen)
 
 # ----------------------------
-# DISPLAY RESULTS
+# DISPLAY RESULTS (OPTION A)
 # ----------------------------
 
 st.success("✅ SGP built successfully")
 
 main_team = choose_main_team(
-    eligible_players,
+    eligible,
     team_a["code"],
     team_b["code"]
 )
-
-
 
 opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
 
@@ -293,16 +291,12 @@ st.write(
 
 st.subheader("🔥 Final Slip")
 for p in chosen:
-    st.write(
-        f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})'
-    )
+    st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
 
 if len(safe) < len(chosen):
     st.subheader("🛡 SAFE Slip")
     for p in safe:
-        st.write(
-            f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})'
-        )
+        st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
 
 # ----------------------------
 # DEBUG OUTPUT
