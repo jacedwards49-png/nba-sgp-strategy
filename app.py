@@ -275,7 +275,7 @@ if run_btn:
         # DISPLAY RESULTS (OPTION A)
         # ----------------------------
         
-        st.success("✅ SGP built successfully")
+    st.success("✅ SGP built successfully")
         
         main_team = choose_main_team(
             eligible,
