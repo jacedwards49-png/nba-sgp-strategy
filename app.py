@@ -217,16 +217,7 @@ if run_btn:
                         "ast": s.get("assists", 0),
                         "pra": s.get("points", 0) + s.get("totReb", 0) + s.get("assists", 0)
                     })
-
-            # DEBUG POINT #2 — verify logs built correctly
-sample = next(iter(logs.values()), None)
-
-if sample:
-    st.write("DEBUG sample player:", sample["name"])
-    st.write("DEBUG games count:", len(sample["games"]))
-    st.write("DEBUG games detail:", sample["games"])
-else:
-    st.write("DEBUG logs is EMPTY")
+            
 
 
             for info in logs.values():
