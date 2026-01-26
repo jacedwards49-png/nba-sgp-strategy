@@ -405,7 +405,7 @@ def get_player_game_stats(game_id: int, team_id: int):
 
 if run_btn:
     with st.spinner("Crunching the numbers....."):
-        try:
+        
             candidates = []
             eligible_players = []
             near_miss_candidates = []
