@@ -53,7 +53,7 @@ PREF_ORDER = ["REB", "AST", "PRA", "PTS"]
 
 def minutes_gate(last5):
     mins = [g["min"] for g in last5]
-    return len(mins) == 5 and (all(m >= 28 for m in mins) or sum(m > 30 for m in mins) >= 4)
+    return len(mins) == 5 and (all(m >= 25 for m in mins) or sum(m > 27 for m in mins) >= 4)
 
 def near_miss_score(last5, stat, floor):
     vals = [g[stat.lower()] for g in last5]
