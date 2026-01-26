@@ -490,3 +490,76 @@ if run_btn:
                                 "variance": VARIANCE_RANK[stat],
                             }
                         )
+
+# ============================================================
+# FINAL SELECTION + OUTPUT
+# ============================================================
+
+# No valid candidates
+if len(candidates) < 3:
+    st.warning(random.choice(NO_BET_MESSAGES))
+    if show_debug:
+        st.subheader("Debug: No valid candidates")
+        st.json(all_debug)
+    st.stop()
+
+# Sort candidates by preference → variance → player
+candidates.sort(key=lambda x: (x["pref"], x["variance"], x["player"]))
+
+# Determine main team
+main_team = choose_main_team(
+    eligible_players,
+    team_a["code"],
+    team_b["code"]
+)
+opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
+
+# Determine number of legs
+legs = mode_to_legs(risk_mode, legs_n)
+
+# Build SGP with constraints
+chosen = build_sgp_with_constraints(
+    candidates,
+    team_a["code"],
+    team_b["code"],
+    main_team=main_team,
+    n_legs=legs,
+)
+
+# Safety check
+if len(chosen) < 3:
+    st.warning(random.choice(NO_BET_MESSAGES))
+    if show_debug:
+        st.subheader("Debug: Constraint failure")
+        st.json(all_debug)
+    st.stop()
+
+safe = make_safe(chosen)
+
+# ============================================================
+# DISPLAY RESULTS
+# ============================================================
+
+st.success("✅ SGP built successfully")
+
+st.markdown("### Team constraint")
+st.write(f"Main side inferred: **{main_team}** (max **1** opposing player from **{opp_team}**)")
+
+st.subheader("🔥 Final Slip")
+for p in chosen:
+    st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+
+st.subheader("🛡 SAFE Slip")
+for p in safe:
+    st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+
+if show_debug:
+    st.subheader("Debug: Eligible players")
+    st.dataframe(pd.DataFrame(eligible_players), use_container_width=True)
+
+    st.subheader("Debug: Candidates (top 50)")
+    st.dataframe(pd.DataFrame(candidates).head(50), use_container_width=True)
+
+    st.subheader("Debug: API calls")
+    st.json(all_debug)
+
