@@ -439,6 +439,8 @@ if run_btn:
         candidates = []
         eligible_players = []
         near_miss_candidates = []
+        chosen = []
+
 
         all_debug = {
             "teams": teams_debug,
@@ -548,7 +550,15 @@ if run_btn:
         # ----------------------------
         # NO VALID CANDIDATES — FALLBACK
         # ----------------------------
-        if len(chosen) < 3:
+        min_legs = 2 if allow_two_leg else 3
+
+        if len(chosen) < min_legs:
+            st.warning(random.choice(NO_BET_MESSAGES))
+            if show_debug:
+                st.subheader("Debug: Constraint failure")
+                st.json(all_debug)
+        st.stop()
+
             if len(chosen) == 2: 
                 st.subheader("🟡 2-Leg SGP (Low Volume Matchup)")
             else:
