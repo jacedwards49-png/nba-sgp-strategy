@@ -195,6 +195,7 @@ if run_btn:
 
         for team in (team_a, team_b):
             games = get_games(team["team_id"])
+            st.write("DEBUG games count", team["code"], len(games))
             logs = {}
 
             for g in games:
