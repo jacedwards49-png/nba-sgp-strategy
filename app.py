@@ -18,7 +18,7 @@ st.caption(
 )
 
 # ============================================================
-# API CONFIG (NBA v2 ONLY)
+# API CONFIG
 # ============================================================
 
 API_KEY = st.secrets.get("API_SPORTS_KEY")
@@ -26,11 +26,11 @@ if not API_KEY:
     st.error("Missing API_SPORTS_KEY in Streamlit Secrets.")
     st.stop()
 
-BASE_URL = "https://v2.nba.api-sports.io"   # ✅ NBA v2 only
-NBA_LEAGUE = "standard"                    # ✅ per docs (leagues endpoint shows "standard")
+BASE_URL = "https://v2.nba.api-sports.io"
+NBA_LEAGUE = "standard"
 
 HEADERS = {
-    "x-apisports-key": API_KEY,            # ✅ per docs
+    "x-apisports-key": API_KEY,
     "Accept": "application/json",
     "User-Agent": "Mozilla/5.0",
 }
@@ -45,610 +45,272 @@ NO_BET_MESSAGES = [
 ]
 
 # ============================================================
-# MODEL RULES (LOCKED OPTION A)
+# MODEL RULES (OPTION A)
 # ============================================================
 
 VARIANCE_RANK = {"REB": 1, "AST": 1, "PRA": 2, "PTS": 3}
-PREF_ORDER = ["REB", "AST", "PRA", "PTS"]  # PTS last resort
+PREF_ORDER = ["REB", "AST", "PRA", "PTS"]
 
 def minutes_gate(last5):
     mins = [g["min"] for g in last5]
-    if len(mins) != 5:
-        return False
-
-    # Original strict gates
-    if all(m >= 28 for m in mins):
-        return True
-    if sum(m > 30 for m in mins) >= 4:
-        return True
-
-    # NEW: one soft miss allowed (26–27 min)
-    sorted_mins = sorted(mins)
-    return (
-        sorted_mins[0] >= 26 and
-        all(m >= 28 for m in sorted_mins[1:])
-    )
-
-
-def floor_line(values):
-    return int(math.floor(min(values) * 0.90)) if values else 0
+    return len(mins) == 5 and (all(m >= 28 for m in mins) or sum(m > 30 for m in mins) >= 4)
 
 def near_miss_score(last5, stat, floor):
     vals = [g[stat.lower()] for g in last5]
     mins = [g["min"] for g in last5]
 
     score = 0
-
-    # Stat consistency
     if sum(v >= floor for v in vals) == 4:
         score += 1
-
-    # Minutes near miss
     if not minutes_gate(last5):
-        if sum(m >= 28 for m in mins) == 4:
-            score += 1
-        else:
-            score += 2
-
-    # Floor closeness
+        score += 1
     if min(vals) == floor - 1:
         score += 1
-
-    # Variance penalty
     score += VARIANCE_RANK[stat] - 1
-
     return score
 
-
 def make_safe(chosen):
-    """SAFE slip removes the highest variance leg. Tie-breaker: remove PTS first."""
     if len(chosen) <= 3:
         return chosen
     worst = max(chosen, key=lambda x: (x["variance"], x["stat"] == "PTS"))
     return [x for x in chosen if x is not worst]
 
-def mode_to_legs(mode, ideal_legs, allow_two_leg=False):
-    """
-    Default:
-      Safe = 3
-      Ideal = ideal_legs (3–5)
-      Higher-risk = 5
-
-    If allow_two_leg=True and model cannot reach 3 legs,
-    caller may override down to 2.
-    """
+def mode_to_legs(mode, ideal):
     if mode == "Safe":
-        return 3
+        return 2
     if mode == "Higher-risk":
         return 5
-    return int(ideal_legs)
+    return int(ideal)
 
+def choose_main_team(players, a, b):
+    counts = {a: 0, b: 0}
+    for p in players:
+        if p["team"] in counts:
+            counts[p["team"]] += 1
+    return a if counts[a] >= counts[b] else b
 
-def choose_main_team(eligible_players, team_a_code, team_b_code):
-    counts = {team_a_code: 0, team_b_code: 0}
-    for p in eligible_players:
-        t = p["team"]
-        if t in counts:
-            counts[t] += 1
-    return team_a_code if counts[team_a_code] >= counts[team_b_code] else team_b_code
-
-def build_sgp_with_constraints(cands, team_a_code, team_b_code, main_team, n_legs):
-    n_legs = max(2, min(5, int(n_legs)))
-    opp_team = team_b_code if main_team == team_a_code else team_a_code
-
+def build_sgp_with_constraints(cands, a, b, main_team, n_legs):
+    opp = b if main_team == a else a
     chosen = []
-    used_opp_player = False
+    used_opp = False
 
     for c in cands:
         if len(chosen) >= n_legs:
             break
-
-        # max 1 opposing player
-        if c["team"] == opp_team:
-            if used_opp_player:
+        if c["team"] == opp:
+            if used_opp:
                 continue
-            used_opp_player = True
-
-        # no duplicate player+stat
+            used_opp = True
         if any(x["player"] == c["player"] and x["stat"] == c["stat"] for x in chosen):
             continue
-
         chosen.append(c)
 
     return chosen
 
 # ============================================================
-# NBA SEASON (safe resolver)
+# NBA SEASON
 # ============================================================
 
-def current_nba_season_start_year() -> int:
+def current_season():
     today = datetime.today()
     return today.year if today.month >= 10 else today.year - 1
 
-CURRENT_START_YEAR = current_nba_season_start_year()
-st.caption(f"NBA season: **{CURRENT_START_YEAR}–{str(CURRENT_START_YEAR+1)[-2:]}**")
+SEASON = current_season()
+st.caption(f"NBA season: **{SEASON}–{str(SEASON+1)[-2:]}**")
 
 # ============================================================
-# API HELPERS (NBA v2)
+# API HELPERS
 # ============================================================
 
-def api_get(path, params=None, retries=3, timeout=25, debug_log=None):
-    params = params or {}
-    url = f"{BASE_URL}/{path.lstrip('/')}"
-    last_err = None
-
-    for attempt in range(retries):
-        try:
-            r = requests.get(url, headers=HEADERS, params=params, timeout=timeout)
-
-            info = {
-                "url": url,
-                "params": dict(params),
-                "status": r.status_code,
-            }
-
-            # retryable
-            if r.status_code in (429, 500, 502, 503, 504):
-                info["note"] = "retryable_status"
-                if debug_log is not None:
-                    debug_log.append(info)
-                time.sleep(1.0 + 0.5 * attempt)
-                continue
-
-            # non-200
-            if r.status_code != 200:
-                info["note"] = "non_200"
-                info["text_preview"] = r.text[:250]
-                if debug_log is not None:
-                    debug_log.append(info)
-                last_err = RuntimeError(f"{url} HTTP {r.status_code}: {r.text[:250]}")
-                break
-
-            j = r.json()
-
-            # nba v2 uses errors: []
-            if isinstance(j, dict) and j.get("errors"):
-                info["note"] = "api_errors"
-                info["errors"] = str(j.get("errors"))[:250]
-                if debug_log is not None:
-                    debug_log.append(info)
-                last_err = RuntimeError(f"{url} API errors: {str(j.get('errors'))[:250]}")
-                break
-
-            info["note"] = "ok"
-            if isinstance(j, dict) and "response" in j:
-                info["resp_len"] = len(j.get("response") or [])
-                info["results"] = j.get("results")
-            if debug_log is not None:
-                debug_log.append(info)
-
-            return j
-
-        except requests.exceptions.ReadTimeout as e:
-            last_err = e
-            if debug_log is not None:
-                debug_log.append({"url": url, "params": dict(params), "status": "timeout"})
-            time.sleep(1.0 + 0.5 * attempt)
-        except Exception as e:
-            last_err = e
-            if debug_log is not None:
-                debug_log.append({"url": url, "params": dict(params), "status": "exception", "err": str(e)[:250]})
-            break
-
-    raise RuntimeError("NBA v2 request failed") from last_err
+def api_get(path, params=None):
+    r = requests.get(f"{BASE_URL}/{path}", headers=HEADERS, params=params or {}, timeout=25)
+    r.raise_for_status()
+    return r.json().get("response", [])
 
 @st.cache_data(ttl=86400)
-def resolve_api_season_year():
-    """NBA v2: GET /seasons (no params). Choose max <= current start year."""
-    dbg = []
-    j = api_get("seasons", {}, debug_log=dbg)
-    resp = j.get("response", []) if isinstance(j, dict) else []
-    years = []
-    for s in resp:
-        try:
-            years.append(int(s))
-        except Exception:
-            pass
-    valid = [y for y in years if y <= CURRENT_START_YEAR]
-    season = max(valid) if valid else CURRENT_START_YEAR - 1
-    return season
+def get_teams():
+    return [
+        {
+            "team_id": t["id"],
+            "name": t["name"],
+            "code": t["code"],
+            "logo": t["logo"],
+            "label": f'{t["name"]} ({t["code"]})'
+        }
+        for t in api_get("teams")
+        if t.get("code") and len(t["code"]) == 3
+    ]
 
-API_SEASON_YEAR = resolve_api_season_year()
-st.caption(f"API data season year: **{API_SEASON_YEAR}**")
+@st.cache_data(ttl=1800)
+def get_games(team_id):
+    games = api_get("games", {"league": NBA_LEAGUE, "season": SEASON, "team": team_id})
+    games = sorted(games, key=lambda g: g["date"]["start"], reverse=True)
+    return games[:5]
 
-# ============================================================
-# TEAM LIST (NBA v2: /teams — no league, no season required)
-# ============================================================
+@st.cache_data(ttl=1800)
+def get_stats(game_id, team_id):
+    return api_get("players/statistics", {"season": SEASON, "game": game_id, "team": team_id})
 
-@st.cache_data(ttl=86400)
-def get_team_display_list():
-    dbg = []
-    j = api_get("teams", {}, debug_log=dbg)
-    resp = j.get("response", []) if isinstance(j, dict) else []
-
-    teams = []
-    for t in resp:
-        if not isinstance(t, dict):
-            continue
-        tid = t.get("id")
-        name = t.get("name")
-        code = (t.get("code") or "").upper()
-        logo = t.get("logo")
-        # keep only real NBA teams (some APIs include misc entries; code is best filter)
-        if tid and name and code and len(code) == 3:
-            teams.append(
-                {
-                    "team_id": int(tid),
-                    "name": str(name),
-                    "code": code,
-                    "logo": logo,
-                    "label": f"{name} ({code})",
-                }
-            )
-
-    # de-dupe by code
-    dedup = {}
-    for t in teams:
-        dedup[t["code"]] = t
-
-    final = sorted(dedup.values(), key=lambda x: x["name"])
-    return final, dbg
+def parse_minutes(v):
+    return int(str(v).split(":")[0]) if v else 0
 
 # ============================================================
 # UI — CONTROLS
 # ============================================================
 
-col1, col2, col3 = st.columns(3)
-with col1:
-    legs_n = st.slider("Ideal legs (2–5)", 2, 5, 4)
-with col2:
-    risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"], index=1)
-with col3:
+c1, c2, c3 = st.columns(3)
+with c1:
+    legs_n = st.slider("Ideal legs (2–5)", 2, 5, 3)
+with c2:
+    risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"])
+with c3:
     show_debug = st.toggle("Show debug", False)
 
-# 2-leg option
 allow_two_leg = st.checkbox(
     "Allow 2-leg parlay (higher confidence)",
     value=False,
-    help="Enables building a 2-leg SGP when selected or when the model finds limited edge."
+    help="Allows 2-leg SGPs when edge is limited"
 )
 
+teams = get_teams()
+lookup = {t["label"]: t for t in teams}
 
-teams, teams_debug = get_team_display_list()
-if not teams:
-    st.error("Teams unavailable from API-Sports (NBA v2).")
-    if show_debug:
-        st.subheader("Debug: /teams call")
-        st.json(teams_debug)
-    st.stop()
-
-team_lookup = {t["label"]: t for t in teams}
-labels = list(team_lookup.keys())
-
-# ============================================================
-# TEAM DROPDOWNS
-# ============================================================
-
-colA, colB, colC = st.columns([5, 1, 5])
-with colA:
-    team_a_label = st.selectbox("Team A", labels, index=0)
-with colB:
-    st.markdown("<br><h3 style='text-align:center'>vs</h3>", unsafe_allow_html=True)
-with colC:
-    team_b_label = st.selectbox("Team B", labels, index=1)
-
-team_a = team_lookup[team_a_label]
-team_b = team_lookup[team_b_label]
-
-logo1, logo2 = st.columns(2)
-with logo1:
-    if team_a.get("logo"):
-        st.image(team_a["logo"], width=80)
-with logo2:
-    if team_b.get("logo"):
-        st.image(team_b["logo"], width=80)
+a, _, b = st.columns([5,1,5])
+with a:
+    team_a = lookup[st.selectbox("Team A", lookup.keys())]
+with b:
+    team_b = lookup[st.selectbox("Team B", lookup.keys())]
 
 run_btn = st.button("Auto-build best SGP", type="primary")
-
-# ============================================================
-# DATA HELPERS (NBA v2)
-# ============================================================
-
-def parse_minutes(val):
-    if val is None:
-        return 0
-    s = str(val).strip()
-    if not s:
-        return 0
-    try:
-        # "34:12" -> 34
-        if ":" in s:
-            return int(float(s.split(":")[0]))
-        return int(float(s))
-    except Exception:
-        return 0
-
-def game_date_key(g):
-    # NBA v2 typically returns "date": {"start": "..."} OR "date": "YYYY-MM-DD..." depending on version.
-    d = g.get("date")
-    if isinstance(d, dict):
-        return d.get("start") or ""
-    return d or ""
-
-def is_finished_game(g):
-    # docs show status numbers; finished is typically 3 (Finished).
-    stt = g.get("status")
-    if isinstance(stt, dict):
-        # sometimes { "short": 3, "long": "Finished" }
-        short = stt.get("short")
-        long = (stt.get("long") or "").lower()
-        return short == 3 or "finished" in long
-    if isinstance(stt, int):
-        return stt == 3
-    if isinstance(stt, str):
-        return stt.strip() in ("3",) or "finished" in stt.lower()
-    return False
-
-@st.cache_data(ttl=1800)
-def get_last_games(team_id: int):
-    """
-    NBA v2 /games requires at least one parameter.
-    Use league=standard + season=YYYY + team=<id>.
-    """
-    dbg = []
-    j = api_get(
-        "games",
-        {"league": NBA_LEAGUE, "season": API_SEASON_YEAR, "team": team_id},
-        debug_log=dbg,
-    )
-    resp = j.get("response", []) if isinstance(j, dict) else []
-    if not resp:
-        return [], dbg
-
-    # Sort newest first
-    resp = sorted(resp, key=game_date_key, reverse=True)
-
-    # Prefer finished games for logs
-    finished = [g for g in resp if isinstance(g, dict) and is_finished_game(g)]
-    use = finished if len(finished) >= 5 else resp
-    return use[:5], dbg
-
-@st.cache_data(ttl=1800)
-def get_player_game_stats(game_id: int, team_id: int):
-    """
-    NBA v2 player stats endpoint from docs: /players/statistics
-    Requires at least one parameter.
-    Most reliable: season + game + team
-    """
-    dbg = []
-    j = api_get(
-        "players/statistics",
-        {"season": API_SEASON_YEAR, "game": game_id, "team": team_id},
-        debug_log=dbg,
-    )
-    resp = j.get("response", []) if isinstance(j, dict) else []
-    return resp, dbg
 
 # ============================================================
 # EXECUTION
 # ============================================================
 
 if run_btn:
-    with st.spinner("Crunching the numbers....."):
+    with st.spinner("Crunching the numbers..."):
 
-        candidates = []
-        eligible_players = []
-        near_miss_candidates = []
-        chosen = []
+        candidates, near_miss, eligible = [], [], []
+        min_legs = 2 if allow_two_leg else 3
 
-
-        all_debug = {
-            "teams": teams_debug,
-            "last_games": {},
-            "player_stats": {}
-        }
-
-        # ----------------------------
-        # COLLECT PLAYER GAME LOGS
-        # ----------------------------
         for team in (team_a, team_b):
-            games, games_dbg = get_last_games(int(team["team_id"]))
-            all_debug["last_games"][team["code"]] = games_dbg
-
-            if len(games) < 5:
-                continue
-
-            player_logs = {}
+            games = get_games(team["team_id"])
+            logs = {}
 
             for g in games:
-                if not isinstance(g, dict):
-                    continue
+                for r in get_stats(g["id"], team["team_id"]):
+                    p = r["player"]
+                    s = r["statistics"]
+                    pid = p["id"]
 
-                gid = g.get("id")
-                if not gid:
-                    continue
+                    logs.setdefault(pid, {
+                        "name": p["name"],
+                        "team": team["code"],
+                        "games": []
+                    })
 
-                rows, stats_dbg = get_player_game_stats(
-                    int(gid),
-                    int(team["team_id"])
-                )
-                all_debug["player_stats"][f"{team['code']}_{gid}"] = stats_dbg
+                    logs[pid]["games"].append({
+                        "min": parse_minutes(s.get("minutes")),
+                        "pts": s.get("points", 0),
+                        "reb": s.get("totReb", 0),
+                        "ast": s.get("assists", 0),
+                        "pra": s.get("points", 0) + s.get("totReb", 0) + s.get("assists", 0)
+                    })
 
-                for r in rows:
-                    if not isinstance(r, dict):
-                        continue
-
-                    p = r.get("player", {}) or {}
-                    pid = p.get("id")
-                    name = p.get("name") or "Unknown"
-                    if not pid:
-                        continue
-
-                    stats = r.get("statistics", {}) or {}
-
-                    log = {
-                        "min": parse_minutes(stats.get("minutes") or stats.get("min")),
-                        "pts": int(stats.get("points") or stats.get("pts") or 0),
-                        "reb": int(stats.get("totReb") or stats.get("reb") or 0),
-                        "ast": int(stats.get("assists") or stats.get("ast") or 0),
-                    }
-                    log["pra"] = log["pts"] + log["reb"] + log["ast"]
-
-                    player_logs.setdefault(
-                        pid,
-                        {"name": name, "team": team["code"], "games": []}
-                    )
-                    player_logs[pid]["games"].append(log)
-
-            # ----------------------------
-            # EVALUATE PLAYERS
-            # ----------------------------
-            for info in player_logs.values():
+            for info in logs.values():
                 last5 = info["games"]
-
                 if len(last5) != 5:
                     continue
 
-                passes_minutes = minutes_gate(last5)
-
-                if passes_minutes:
-                    eligible_players.append({
-                        "player": info["name"],
-                        "team": info["team"]
-                    })
-
                 for stat in PREF_ORDER:
-                    key = stat.lower()
-                    values = [g[key] for g in last5]
-
-                    if any(v is None for v in values):
-                        continue
-
-                    floor = int(min(values) * 0.90)
+                    vals = [g[stat.lower()] for g in last5]
+                    floor = int(min(vals) * 0.9)
                     if floor <= 0:
                         continue
 
-                    if passes_minutes:
+                    if minutes_gate(last5):
+                        eligible.append({"player": info["name"], "team": info["team"]})
                         candidates.append({
                             "player": info["name"],
                             "team": info["team"],
                             "stat": stat,
                             "line": floor,
                             "pref": PREF_ORDER.index(stat),
-                            "variance": VARIANCE_RANK[stat],
+                            "variance": VARIANCE_RANK[stat]
                         })
                     else:
-                        near_miss_candidates.append({
+                        near_miss.append({
                             "player": info["name"],
                             "team": info["team"],
                             "stat": stat,
                             "line": floor,
                             "variance": VARIANCE_RANK[stat],
-                            "score": near_miss_score(last5, stat, floor),
+                            "score": near_miss_score(last5, stat, floor)
                         })
 
-        # ----------------------------
-        # NO VALID CANDIDATES — FALLBACK
-        # ----------------------------
-        min_legs = 2 if allow_two_leg else 3
-
-        if len(chosen) < min_legs:
-            st.warning(random.choice(NO_BET_MESSAGES))
-            if show_debug:
-                st.subheader("Debug: Constraint failure")
-                st.json(all_debug)
-        st.stop()
-
-            if len(chosen) == 2: 
-                st.subheader("🟡 2-Leg SGP (Low Volume Matchup)")
-            else:
-                st.warning(random.choice(NO_BET_MESSAGES))
-                st.stop()
-
-
-            if near_miss_candidates:
-                st.subheader("🟡 Closest Possible Parlay (Did Not Fully Qualify)")
-                st.caption(
-                    "These legs missed Option A gates by the smallest margin. "
-                    "Use at your own discretion."
-                )
-
-                near_miss_candidates.sort(
-                    key=lambda x: (x["variance"], -x["score"])
-                )
-
-                fallback_legs = near_miss_candidates[:mode_to_legs(risk_mode, legs_n)]
-
-                for p in fallback_legs:
-                    st.write(
-                        f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]}) '
-                        f'(near-miss score: {p["score"]})'
-                    )
-            else:
-                st.caption("No reasonable fallback legs were found for this matchup.")
-
-            if show_debug:
-                st.subheader("Debug: Near-miss candidates")
-                st.dataframe(pd.DataFrame(near_miss_candidates))
-                st.subheader("Debug: API calls")
-                st.json(all_debug)
-
-            st.stop()
-
-        # ----------------------------
-        # BUILD FINAL SGP
-        # ----------------------------
-        candidates.sort(key=lambda x: (x["pref"], x["variance"], x["player"]))
-
-        main_team = choose_main_team(
-            eligible_players,
-            team_a["code"],
-            team_b["code"]
-        )
-        opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
-
-        legs = mode_to_legs(risk_mode, legs_n)
+        candidates.sort(key=lambda x: (x["pref"], x["variance"]))
 
         chosen = build_sgp_with_constraints(
             candidates,
             team_a["code"],
             team_b["code"],
-            main_team=main_team,
-            n_legs=legs,
+            choose_main_team(eligible, team_a["code"], team_b["code"]),
+            mode_to_legs(risk_mode, legs_n)
         )
 
-        if len(chosen) < 2:
+        if len(chosen) < min_legs:
             st.warning(random.choice(NO_BET_MESSAGES))
-            if show_debug:
-                st.subheader("Debug: Constraint failure")
-                st.json(all_debug)
+            if near_miss:
+                st.subheader("🟡 Closest Possible Parlay")
+                near_miss.sort(key=lambda x: (x["variance"], -x["score"]))
+                for p in near_miss[:min_legs]:
+                    st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]}')
             st.stop()
 
         safe = make_safe(chosen)
 
-        # ----------------------------
-        # DISPLAY RESULTS
-        # ----------------------------
-        st.success("✅ SGP built successfully")
+# ----------------------------
+# DISPLAY RESULTS
+# ----------------------------
 
-        st.markdown("### Team constraint")
+st.success("✅ SGP built successfully")
+
+main_team = choose_main_team(
+    eligible,
+    team_a["code"],
+    team_b["code"]
+)
+opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
+
+st.markdown("### Team constraint")
+st.write(
+    f"Main side inferred: **{main_team}** "
+    f"(max **1** opposing player from **{opp_team}**)"
+)
+
+st.subheader("🔥 Final Slip")
+for p in chosen:
+    st.write(
+        f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})'
+    )
+
+if len(safe) < len(chosen):
+    st.subheader("🛡 SAFE Slip")
+    for p in safe:
         st.write(
-            f"Main side inferred: **{main_team}** "
-            f"(max **1** opposing player from **{opp_team}**)"
+            f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})'
         )
 
-        st.subheader("🔥 Final Slip")
-        for p in chosen:
-            st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+# ----------------------------
+# DEBUG OUTPUT
+# ----------------------------
+if show_debug:
+    st.subheader("Debug: Eligible players")
+    st.dataframe(pd.DataFrame(eligible))
 
-        st.subheader("🛡 SAFE Slip")
-        for p in safe:
-            st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+    st.subheader("Debug: Candidates (top 50)")
+    st.dataframe(pd.DataFrame(candidates).head(50))
 
-        if show_debug:
-            st.subheader("Debug: Eligible players")
-            st.dataframe(pd.DataFrame(eligible_players))
-            st.subheader("Debug: Candidates (top 50)")
-            st.dataframe(pd.DataFrame(candidates).head(50))
-            st.subheader("Debug: API calls")
-            st.json(all_debug)
+    st.subheader("Debug: Near-miss candidates")
+    st.dataframe(pd.DataFrame(near_miss))
+
