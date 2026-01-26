@@ -269,6 +269,8 @@ if run_btn:
 
         safe = make_safe(chosen)
 
+    st.success("🔍 Search complete for this matchup")
+
         # ----------------------------
         # DISPLAY RESULTS (OPTION A)
         # ----------------------------
