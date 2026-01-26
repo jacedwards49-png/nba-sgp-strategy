@@ -276,7 +276,7 @@ if run_btn:
 st.success("✅ SGP built successfully")
 
 main_team = choose_main_team(
-    eligible,
+    eligible_players,
     team_a["code"],
     team_b["code"]
 )
