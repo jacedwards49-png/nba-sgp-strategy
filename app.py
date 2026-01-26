@@ -107,12 +107,22 @@ def make_safe(chosen):
     worst = max(chosen, key=lambda x: (x["variance"], x["stat"] == "PTS"))
     return [x for x in chosen if x is not worst]
 
-def mode_to_legs(mode, ideal_legs):
+def mode_to_legs(mode, ideal_legs, allow_two_leg=False):
+    """
+    Default:
+      Safe = 3
+      Ideal = ideal_legs (3–5)
+      Higher-risk = 5
+
+    If allow_two_leg=True and model cannot reach 3 legs,
+    caller may override down to 2.
+    """
     if mode == "Safe":
         return 3
     if mode == "Higher-risk":
         return 5
     return int(ideal_legs)
+
 
 def choose_main_team(eligible_players, team_a_code, team_b_code):
     counts = {team_a_code: 0, team_b_code: 0}
@@ -290,11 +300,19 @@ def get_team_display_list():
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    legs_n = st.slider("Ideal legs (3–5)", 3, 5, 4)
+    legs_n = st.slider("Ideal legs (2–5)", 2, 5, 4)
 with col2:
     risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"], index=1)
 with col3:
     show_debug = st.toggle("Show debug", False)
+
+# 2-leg option
+allow_two_leg = st.checkbox(
+    "Allow 2-leg parlay (higher confidence)",
+    value=False,
+    help="Enables building a 2-leg SGP when selected or when the model finds limited edge."
+)
+
 
 teams, teams_debug = get_team_display_list()
 if not teams:
@@ -530,8 +548,13 @@ if run_btn:
         # ----------------------------
         # NO VALID CANDIDATES — FALLBACK
         # ----------------------------
-        if len(candidates) < 2:
-            st.warning(random.choice(NO_BET_MESSAGES))
+        if len(chosen) < 3:
+            if len(chosen) == 2: 
+                st.subheader("🟡 2-Leg SGP (Low Volume Matchup)")
+            else:
+                st.warning(random.choice(NO_BET_MESSAGES))
+                st.stop()
+
 
             if near_miss_candidates:
                 st.subheader("🟡 Closest Possible Parlay (Did Not Fully Qualify)")
