@@ -521,14 +521,36 @@ for stat in PREF_ORDER:
 
 
         # ----------------------------
-        # NO VALID CANDIDATES
-        # ----------------------------
-        if len(candidates) < 3:
-            st.warning(random.choice(NO_BET_MESSAGES))
-            if show_debug:
-                st.subheader("Debug: No valid candidates")
-                st.json(all_debug)
-            st.stop()
+# NO VALID CANDIDATES — FALLBACK
+# ----------------------------
+if len(candidates) < 3:
+    st.warning(random.choice(NO_BET_MESSAGES))
+
+    if near_miss_candidates:
+        st.subheader("🟡 Closest Possible Parlay (Did Not Fully Qualify)")
+        st.caption(
+            "These legs missed Option A gates by the smallest margin. "
+            "Use at your own discretion."
+        )
+
+        near_miss_candidates.sort(
+            key=lambda x: (x["variance"], -x["score"])
+        )
+
+        fallback_legs = near_miss_candidates[:mode_to_legs(risk_mode, legs_n)]
+
+        for p in fallback_legs:
+            st.write(
+                f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]}) '
+                f'(near-miss score: {p["score"]})'
+            )
+
+    if show_debug:
+        st.subheader("Debug: Near-miss candidates")
+        st.dataframe(pd.DataFrame(near_miss_candidates))
+
+    st.stop()
+
 
         # ----------------------------
         # BUILD FINAL SGP
