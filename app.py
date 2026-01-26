@@ -10,8 +10,8 @@ from datetime import datetime
 # STREAMLIT SETUP
 # ============================================================
 
-st.set_page_config(page_title="NBA SGP Ultimate Builder (Option A)", layout="centered")
-st.title("NBA SGP Ultimate Builder (Option A)")
+st.set_page_config(page_title="MMMBets NBA SGP Generator", layout="centered")
+st.title("MMMBets NBA SGP Generator")
 st.caption(
     "Team dropdown • API-Sports NBA v2 • Last 5 only • 5/5 gate • Minutes gate • "
     "Floor lines • Prefer REB/AST/PRA • Max 1 opposing player • FINAL + SAFE"
