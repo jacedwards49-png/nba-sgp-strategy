@@ -123,7 +123,7 @@ def choose_main_team(eligible_players, team_a_code, team_b_code):
     return team_a_code if counts[team_a_code] >= counts[team_b_code] else team_b_code
 
 def build_sgp_with_constraints(cands, team_a_code, team_b_code, main_team, n_legs):
-    n_legs = max(3, min(5, int(n_legs)))
+    n_legs = max(2, min(5, int(n_legs)))
     opp_team = team_b_code if main_team == team_a_code else team_a_code
 
     chosen = []
@@ -530,7 +530,7 @@ if run_btn:
         # ----------------------------
         # NO VALID CANDIDATES — FALLBACK
         # ----------------------------
-        if len(candidates) < 3:
+        if len(candidates) < 2:
             st.warning(random.choice(NO_BET_MESSAGES))
 
             if near_miss_candidates:
@@ -584,7 +584,7 @@ if run_btn:
             n_legs=legs,
         )
 
-        if len(chosen) < 3:
+        if len(chosen) < 2:
             st.warning(random.choice(NO_BET_MESSAGES))
             if show_debug:
                 st.subheader("Debug: Constraint failure")
