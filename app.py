@@ -277,39 +277,39 @@ if run_btn:
         
     st.success("✅ SGP built successfully")
         
-        main_team = choose_main_team(
-            eligible,
-            team_a["code"],
-            team_b["code"]
-        )
-        
-        opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
-        
-        st.markdown("### Team constraint")
-        st.write(
-            f"Main side inferred: **{main_team}** "
-            f"(max **1** opposing player from **{opp_team}**)"
-        )
-        
-        st.subheader("🔥 Final Slip")
-        for p in chosen:
+    main_team = choose_main_team(
+        eligible,
+        team_a["code"],
+        team_b["code"]
+    )
+    
+    opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
+    
+    st.markdown("### Team constraint")
+    st.write(
+        f"Main side inferred: **{main_team}** "
+        f"(max **1** opposing player from **{opp_team}**)"
+    )
+    
+    st.subheader("🔥 Final Slip")
+    for p in chosen:
+        st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+    
+    if len(safe) < len(chosen):
+        st.subheader("🛡 SAFE Slip")
+        for p in safe:
             st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
-        
-        if len(safe) < len(chosen):
-            st.subheader("🛡 SAFE Slip")
-            for p in safe:
-                st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
-        
-        # ----------------------------
-        # DEBUG OUTPUT
-        # ----------------------------
-        if show_debug:
-            st.subheader("Debug: Eligible players")
-            st.dataframe(pd.DataFrame(eligible))
-        
-            st.subheader("Debug: Candidates (top 50)")
-            st.dataframe(pd.DataFrame(candidates).head(50))
-        
-            st.subheader("Debug: Near-miss candidates")
-            st.dataframe(pd.DataFrame(near_miss))
-        
+    
+    # ----------------------------
+    # DEBUG OUTPUT
+    # ----------------------------
+    if show_debug:
+        st.subheader("Debug: Eligible players")
+        st.dataframe(pd.DataFrame(eligible))
+    
+        st.subheader("Debug: Candidates (top 50)")
+        st.dataframe(pd.DataFrame(candidates).head(50))
+    
+        st.subheader("Debug: Near-miss candidates")
+        st.dataframe(pd.DataFrame(near_miss))
+    
