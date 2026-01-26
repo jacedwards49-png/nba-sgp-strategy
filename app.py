@@ -416,9 +416,9 @@ if run_btn:
             "player_stats": {}
         }
 
-        # --------------------------------------------------
+        # ----------------------------
         # COLLECT PLAYER GAME LOGS
-        # --------------------------------------------------
+        # ----------------------------
         for team in (team_a, team_b):
             games, games_dbg = get_last_games(int(team["team_id"]))
             all_debug["last_games"][team["code"]] = games_dbg
@@ -429,6 +429,9 @@ if run_btn:
             player_logs = {}
 
             for g in games:
+                if not isinstance(g, dict):
+                    continue
+
                 gid = g.get("id")
                 if not gid:
                     continue
@@ -440,6 +443,9 @@ if run_btn:
                 all_debug["player_stats"][f"{team['code']}_{gid}"] = stats_dbg
 
                 for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+
                     p = r.get("player", {}) or {}
                     pid = p.get("id")
                     name = p.get("name") or "Unknown"
@@ -450,9 +456,9 @@ if run_btn:
 
                     log = {
                         "min": parse_minutes(stats.get("minutes") or stats.get("min")),
-                        "pts": int(stats.get("points") or 0),
-                        "reb": int(stats.get("totReb") or 0),
-                        "ast": int(stats.get("assists") or 0),
+                        "pts": int(stats.get("points") or stats.get("pts") or 0),
+                        "reb": int(stats.get("totReb") or stats.get("reb") or 0),
+                        "ast": int(stats.get("assists") or stats.get("ast") or 0),
                     }
                     log["pra"] = log["pts"] + log["reb"] + log["ast"]
 
@@ -462,18 +468,18 @@ if run_btn:
                     )
                     player_logs[pid]["games"].append(log)
 
-            # --------------------------------------------------
+            # ----------------------------
             # EVALUATE PLAYERS
-            # --------------------------------------------------
+            # ----------------------------
             for info in player_logs.values():
                 last5 = info["games"]
 
                 if len(last5) != 5:
                     continue
 
-                passed_minutes = minutes_gate(last5)
+                passes_minutes = minutes_gate(last5)
 
-                if passed_minutes:
+                if passes_minutes:
                     eligible_players.append({
                         "player": info["name"],
                         "team": info["team"]
@@ -490,8 +496,7 @@ if run_btn:
                     if floor <= 0:
                         continue
 
-                    # FULL QUALIFIER
-                    if passed_minutes:
+                    if passes_minutes:
                         candidates.append({
                             "player": info["name"],
                             "team": info["team"],
@@ -500,8 +505,6 @@ if run_btn:
                             "pref": PREF_ORDER.index(stat),
                             "variance": VARIANCE_RANK[stat],
                         })
-
-                    # NEAR MISS (minutes only)
                     else:
                         near_miss_candidates.append({
                             "player": info["name"],
@@ -512,9 +515,9 @@ if run_btn:
                             "score": near_miss_score(last5, stat, floor),
                         })
 
-        # --------------------------------------------------
-        # NO VALID CANDIDATES → FALLBACK
-        # --------------------------------------------------
+        # ----------------------------
+        # NO VALID CANDIDATES — FALLBACK
+        # ----------------------------
         if len(candidates) < 3:
             st.warning(random.choice(NO_BET_MESSAGES))
 
@@ -536,16 +539,20 @@ if run_btn:
                         f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]}) '
                         f'(near-miss score: {p["score"]})'
                     )
+            else:
+                st.caption("No reasonable fallback legs were found for this matchup.")
 
             if show_debug:
                 st.subheader("Debug: Near-miss candidates")
                 st.dataframe(pd.DataFrame(near_miss_candidates))
+                st.subheader("Debug: API calls")
+                st.json(all_debug)
 
             st.stop()
 
-        # --------------------------------------------------
+        # ----------------------------
         # BUILD FINAL SGP
-        # --------------------------------------------------
+        # ----------------------------
         candidates.sort(key=lambda x: (x["pref"], x["variance"], x["player"]))
 
         main_team = choose_main_team(
@@ -567,13 +574,16 @@ if run_btn:
 
         if len(chosen) < 3:
             st.warning(random.choice(NO_BET_MESSAGES))
+            if show_debug:
+                st.subheader("Debug: Constraint failure")
+                st.json(all_debug)
             st.stop()
 
         safe = make_safe(chosen)
 
-        # --------------------------------------------------
+        # ----------------------------
         # DISPLAY RESULTS
-        # --------------------------------------------------
+        # ----------------------------
         st.success("✅ SGP built successfully")
 
         st.markdown("### Team constraint")
