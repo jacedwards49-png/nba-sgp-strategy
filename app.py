@@ -457,7 +457,7 @@ if run_btn:
 
                 # Evaluate players (must have 5 games + minutes gate)
 for info in player_logs.values():
-    try:
+    
         last5 = info["last5"]
 
         # Gate: must have exactly 5 games + minutes check
