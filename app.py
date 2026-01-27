@@ -10,7 +10,7 @@ from datetime import datetime
 st.set_page_config(page_title="MMMBets NBA SGP Generator", layout="centered")
 st.title("MMMBets NBA SGP Generator")
 st.caption(
-    "Last 5 completed games • Box score stats • Minutes gate • "
+    "Last 5 completed games • Box score stats • "
     "Floor lines • Prefer REB/AST/PRA • Max 1 opposing player"
 )
 
@@ -67,8 +67,6 @@ def near_miss_score(last5, stat, floor):
     vals = [g[stat.lower()] for g in last5]
     score = 0
     if sum(v >= floor for v in vals) == 4:
-        score += 1
-    if not minutes_gate(last5):
         score += 1
     if min(vals) == floor - 1:
         score += 1
@@ -188,11 +186,10 @@ def parse_minutes(v):
 # ============================================================
 
 legs_n = st.slider("Ideal legs (2–5)", 2, 5, 3)
-risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"])
 allow_two_leg = st.checkbox("Allow 2-leg parlay (higher confidence)")
 allow_fallback = st.checkbox(
-    "Allow fallback parlay (near-miss plays)",
-    help="If no clean SGP is found, build a disciplined fallback using near-miss candidates."
+    "Allow fallback parlay (minutes gate removed)",
+    help="If no clean SGP is found, build a fallback ignoring minutes gate."
 )
 show_debug = st.toggle("Show debug", False)
 
@@ -233,7 +230,6 @@ if run_btn:
                 for r in players:
                     p = r.get("player", {})
                     s = r.get("statistics", {})
-
                     pid = p.get("id")
                     if not pid:
                         continue
@@ -254,11 +250,6 @@ if run_btn:
                         "pra": s.get("points", 0) + s.get("totReb", 0) + s.get("assists", 0)
                     })
 
-            sample = next(iter(logs.values()), None)
-            if sample:
-                dbg(show_debug, "DEBUG sample player", sample["name"])
-                dbg(show_debug, "DEBUG sample games count", len(sample["games"]))
-
             for info in logs.values():
                 last5 = info["games"]
                 if len(last5) != 5:
@@ -271,7 +262,6 @@ if run_btn:
                         continue
 
                     if minutes_gate(last5):
-                        eligible.append({"player": info["name"], "team": info["team"]})
                         candidates.append({
                             "player": info["name"],
                             "team": info["team"],
@@ -290,7 +280,7 @@ if run_btn:
                         })
 
         # ====================================================
-        # FALLBACK PARLAY (OPTIONAL)
+        # FALLBACK PARLAY (MINUTES GATE REMOVED)
         # ====================================================
 
         if not candidates and allow_fallback and near_miss:
@@ -330,7 +320,7 @@ if run_btn:
             st.warning(random.choice(NO_BET_MESSAGES))
             st.stop()
 
-        main_team = choose_main_team(eligible or candidates, team_a["code"], team_b["code"])
+        main_team = choose_main_team(candidates, team_a["code"], team_b["code"])
         chosen = build_sgp_with_constraints(
             candidates,
             team_a["code"],
@@ -346,7 +336,7 @@ if run_btn:
     # ========================================================
 
     if fallback_used:
-        st.info("⚠️ Fallback parlay (near-miss based)")
+        st.info("⚠️ Fallback parlay (minutes gate removed)")
 
     st.subheader("🔥 Final Slip")
     for p in chosen:
