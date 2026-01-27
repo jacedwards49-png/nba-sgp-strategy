@@ -251,7 +251,6 @@ if run_btn:
                             "variance": VARIANCE_RANK[stat]
                         })
                     else:
-                    if not eligible_minutes:
                         st.write(
                             "DEBUG FAILED MINUTES",
                             info["name"],
