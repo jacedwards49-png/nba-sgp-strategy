@@ -10,7 +10,7 @@ from datetime import datetime
 st.set_page_config(page_title="MMMBets NBA SGP Generator", layout="centered")
 st.title("MMMBets NBA SGP Generator")
 st.caption(
-    "Last 5 completed games only • Box score stats • Minutes gate • "
+    "Last 5 completed games • Box score stats • Minutes gate • "
     "Floor lines • Prefer REB/AST/PRA • Max 1 opposing player"
 )
 
@@ -144,10 +144,6 @@ def get_teams():
         for t in teams if t.get("code")
     ]
 
-# ============================================================
-# STEP 1 — LAST 5 COMPLETED GAMES
-# ============================================================
-
 @st.cache_data(ttl=1800)
 def get_last_5_completed_games(team_id):
     games = api_get(
@@ -167,10 +163,6 @@ def get_last_5_completed_games(team_id):
     )
 
     return finished[:5]
-
-# ============================================================
-# STEP 2 — BOX SCORE STATS (CANONICAL)
-# ============================================================
 
 @st.cache_data(ttl=1800)
 def get_boxscore_players(game_id, team_id):
@@ -198,6 +190,10 @@ def parse_minutes(v):
 legs_n = st.slider("Ideal legs (2–5)", 2, 5, 3)
 risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"])
 allow_two_leg = st.checkbox("Allow 2-leg parlay (higher confidence)")
+allow_fallback = st.checkbox(
+    "Allow fallback parlay (near-miss plays)",
+    help="If no clean SGP is found, build a disciplined fallback using near-miss candidates."
+)
 show_debug = st.toggle("Show debug", False)
 
 teams = get_teams()
@@ -218,12 +214,11 @@ run_btn = st.button("Auto-build best SGP", type="primary")
 if run_btn:
     with st.spinner("Crunching the numbers..."):
         candidates, near_miss, eligible = [], [], []
+        fallback_used = False
         min_legs = 2 if allow_two_leg else 3
 
         for team in (team_a, team_b):
             games = get_last_5_completed_games(team["team_id"])
-
-            # DEBUG #1 — completed games
             dbg(show_debug, "DEBUG completed games", team["code"], len(games))
 
             if len(games) < 5:
@@ -231,14 +226,8 @@ if run_btn:
 
             logs = {}
 
-            # ====================================================
-            # CANONICAL LOOP (FIXED)
-            # ====================================================
-
             for g in games:
                 players = get_boxscore_players(g["id"], team["team_id"])
-
-                # DEBUG #2 — stats per game
                 dbg(show_debug, "DEBUG stats len", team["code"], g["id"], len(players))
 
                 for r in players:
@@ -249,8 +238,10 @@ if run_btn:
                     if not pid:
                         continue
 
+                    name = f"{p.get('firstname','')} {p.get('lastname','')}".strip()
+
                     logs.setdefault(pid, {
-                        "name": f"{p.get('firstname', '')} {p.get('lastname', '')}".strip(),
+                        "name": name,
                         "team": team["code"],
                         "games": []
                     })
@@ -260,20 +251,108 @@ if run_btn:
                         "pts": s.get("points", 0),
                         "reb": s.get("totReb", 0),
                         "ast": s.get("assists", 0),
-                        "pra": (
-                            s.get("points", 0)
-                            + s.get("totReb", 0)
-                            + s.get("assists", 0)
-                        )
+                        "pra": s.get("points", 0) + s.get("totReb", 0) + s.get("assists", 0)
                     })
 
-            # DEBUG #3 — logs integrity
             sample = next(iter(logs.values()), None)
             if sample:
                 dbg(show_debug, "DEBUG sample player", sample["name"])
                 dbg(show_debug, "DEBUG sample games count", len(sample["games"]))
-            else:
-                dbg(show_debug, f"DEBUG logs EMPTY for team {team['code']}")
+
+            for info in logs.values():
+                last5 = info["games"]
+                if len(last5) != 5:
+                    continue
+
+                for stat in PREF_ORDER:
+                    vals = [g[stat.lower()] for g in last5]
+                    floor = int(min(vals) * 0.9)
+                    if floor <= 0:
+                        continue
+
+                    if minutes_gate(last5):
+                        eligible.append({"player": info["name"], "team": info["team"]})
+                        candidates.append({
+                            "player": info["name"],
+                            "team": info["team"],
+                            "stat": stat,
+                            "line": floor,
+                            "variance": VARIANCE_RANK[stat]
+                        })
+                    else:
+                        near_miss.append({
+                            "player": info["name"],
+                            "team": info["team"],
+                            "stat": stat,
+                            "line": floor,
+                            "variance": VARIANCE_RANK[stat],
+                            "score": near_miss_score(last5, stat, floor)
+                        })
+
+        # ====================================================
+        # FALLBACK PARLAY (OPTIONAL)
+        # ====================================================
+
+        if not candidates and allow_fallback and near_miss:
+            ranked = sorted(
+                near_miss,
+                key=lambda x: (x["score"], VARIANCE_RANK[x["stat"]])
+            )
+
+            main_team = choose_main_team(ranked, team_a["code"], team_b["code"])
+            opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
+
+            used_opp = False
+            fallback_legs = []
+
+            for nm in ranked:
+                if len(fallback_legs) >= max(min_legs, legs_n):
+                    break
+
+                if nm["team"] == opp_team:
+                    if used_opp:
+                        continue
+                    used_opp = True
+
+                if any(
+                    x["player"] == nm["player"] and x["stat"] == nm["stat"]
+                    for x in fallback_legs
+                ):
+                    continue
+
+                fallback_legs.append(nm)
+
+            if len(fallback_legs) >= min_legs:
+                fallback_used = True
+                candidates = fallback_legs
 
         if not candidates:
             st.warning(random.choice(NO_BET_MESSAGES))
+            st.stop()
+
+        main_team = choose_main_team(eligible or candidates, team_a["code"], team_b["code"])
+        chosen = build_sgp_with_constraints(
+            candidates,
+            team_a["code"],
+            team_b["code"],
+            main_team,
+            legs_n
+        )
+
+        safe = make_safe(chosen)
+
+    # ========================================================
+    # DISPLAY
+    # ========================================================
+
+    if fallback_used:
+        st.info("⚠️ Fallback parlay (near-miss based)")
+
+    st.subheader("🔥 Final Slip")
+    for p in chosen:
+        st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+
+    if len(safe) < len(chosen):
+        st.subheader("🛡 SAFE Slip")
+        for p in safe:
+            st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
