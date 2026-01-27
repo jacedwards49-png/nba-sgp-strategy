@@ -240,6 +240,17 @@ if run_btn:
                     if floor <= 0:
                         continue
 
+                    st.write("DEBUG CHECKPOINT — evaluating", info["name"], stat)
+
+                    st.write(
+                        "DEBUG last5 mins",
+                        info["name"],
+                        [g["min"] for g in last5],
+                        "len:",
+                        len(last5)
+                    )
+
+
                     if minutes_gate(last5):
                         eligible.append({"player": info["name"], "team": info["team"]})
                         candidates.append({
