@@ -221,12 +221,12 @@ if run_btn:
                     })
                     
             sample = next(iter(logs.values()), None)
-            if sample:
-                    st.write("DEBUG sample player:", sample["name"])
-                    st.write("DEBUG games count:", len(sample["games"]))
-                    st.write("DEBUG games detail:", sample["games"])
-                else:
-                    st.warning("DEBUG logs is EMPTY")
+        if sample:
+                st.write("DEBUG sample player:", sample["name"])
+                st.write("DEBUG games count:", len(sample["games"]))
+                st.write("DEBUG games detail:", sample["games"])
+            else:
+            st.warning("DEBUG logs is EMPTY")
 
 
             for info in logs.values():
