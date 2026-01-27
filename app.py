@@ -250,7 +250,7 @@ if run_btn:
                         continue
 
                     logs.setdefault(pid, {
-                        "name": p.get("name"),
+                        "name": f"{p.get('firstname', '')} {p.get('lastname', '')}".strip(),
                         "team": team["code"],
                         "games": []
                     })
