@@ -179,9 +179,11 @@ def get_boxscore_players(game_id, team_id):
         "players/statistics",
         {
             "game": game_id,
-            "team": team_id
+            "team": team_id,
+            "season": SEASON
         }
     )
+
 
 def parse_minutes(v):
     if not v:
