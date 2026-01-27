@@ -225,7 +225,7 @@ if run_btn:
                 st.write("DEBUG sample player:", sample["name"])
                 st.write("DEBUG games count:", len(sample["games"]))
                 st.write("DEBUG games detail:", sample["games"])
-            else:
+        else:
             st.warning("DEBUG logs is EMPTY")
 
 
