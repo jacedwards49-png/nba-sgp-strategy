@@ -232,7 +232,7 @@ if run_btn:
             logs = {}
 
             for g in games:
-                players = get_boxscore_players(g["id"])
+                players = get_boxscore_players(g["id"], team["team_id"])
 
                 # DEBUG #2 — stats per game
                 dbg(show_debug, "DEBUG stats len", team["code"], g["id"], len(players))
