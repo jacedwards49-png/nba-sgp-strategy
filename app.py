@@ -11,8 +11,8 @@ from datetime import datetime
 st.set_page_config(page_title="MMMBets NBA SGP Generator", layout="centered")
 st.title("MMMBets NBA SGP Generator")
 st.caption(
-    "Team dropdown • API-Sports NBA v2 • Last 5 only • 5/5 gate • Minutes gate • "
-    "Floor lines • Prefer REB/AST/PRA • Max 1 opposing player • FINAL + SAFE"
+    "Last 5 completed games only • Box score stats • Minutes gate • "
+    "Floor lines • Prefer REB/AST/PRA • Max 1 opposing player"
 )
 
 # ============================================================
@@ -30,20 +30,18 @@ NBA_LEAGUE = "standard"
 HEADERS = {
     "x-apisports-key": API_KEY,
     "Accept": "application/json",
-    "User-Agent": "Mozilla/5.0",
 }
 
 NO_BET_MESSAGES = [
-    "❌ No bets here home boy, move to next matchup",
-    "🧊 Cold game — zero edge",
-    "🚫 Nothing clean here, pass it",
-    "📉 Variance too high — bankroll protection engaged",
+    "❌ Nothing clean here, pass it",
+    "🧊 Cold matchup — skip",
+    "🚫 No safe edges",
+    "📉 Variance too high",
     "😴 This matchup ain't it",
-    "🧯 Nothing but traps — skip it",
 ]
 
 # ============================================================
-# MODEL RULES (OPTION A)
+# MODEL RULES (OPTION A — LOCKED)
 # ============================================================
 
 VARIANCE_RANK = {"REB": 1, "AST": 1, "PRA": 2, "PTS": 3}
@@ -76,24 +74,15 @@ def make_safe(chosen):
     worst = max(chosen, key=lambda x: (x["variance"], x["stat"] == "PTS"))
     return [x for x in chosen if x is not worst]
 
-def mode_to_legs(mode, ideal):
-    if mode == "Safe":
-        return 2
-    if mode == "Higher-risk":
-        return 5
-    return int(ideal)
-
 def choose_main_team(players, a, b):
     counts = {a: 0, b: 0}
     for p in players:
-        if p["team"] in counts:
-            counts[p["team"]] += 1
+        counts[p["team"]] += 1
     return a if counts[a] >= counts[b] else b
 
 def build_sgp_with_constraints(cands, a, b, main_team, n_legs):
     opp = b if main_team == a else a
-    chosen = []
-    used_opp = False
+    chosen, used_opp = [], False
 
     for c in cands:
         if len(chosen) >= n_legs:
@@ -112,7 +101,7 @@ def build_sgp_with_constraints(cands, a, b, main_team, n_legs):
     return chosen
 
 # ============================================================
-# NBA SEASON
+# SEASON
 # ============================================================
 
 def current_season():
@@ -120,7 +109,6 @@ def current_season():
     return today.year if today.month >= 10 else today.year - 1
 
 SEASON = current_season()
-st.caption(f"NBA season: **{SEASON}–{str(SEASON+1)[-2:]}**")
 
 # ============================================================
 # API HELPERS
@@ -134,8 +122,7 @@ def api_get(path, params=None):
         timeout=25
     )
     r.raise_for_status()
-    data = r.json()
-    return data.get("response", []) if isinstance(data, dict) else []
+    return r.json().get("response", [])
 
 @st.cache_data(ttl=86400)
 def get_teams():
@@ -147,20 +134,39 @@ def get_teams():
             "code": t["code"],
             "label": f'{t["name"]} ({t["code"]})'
         }
-        for t in teams if t.get("code") and len(t["code"]) == 3
+        for t in teams if t.get("code")
     ]
 
-@st.cache_data(ttl=1800)
-def get_games(team_id):
-    games = api_get("games", {"league": NBA_LEAGUE, "season": SEASON, "team": team_id})
-    games = sorted(games, key=lambda g: g["date"]["start"], reverse=True)
-    return games[:5]
+# ============================================================
+# 🔑 STEP 1 — LAST 5 COMPLETED GAMES ONLY
+# ============================================================
 
-# =======================
-# 🔴 FIXED get_stats 🔴
-# =======================
 @st.cache_data(ttl=1800)
-def get_stats(game_id):
+def get_last_5_completed_games(team_id):
+    games = api_get(
+        "games",
+        {"league": NBA_LEAGUE, "season": SEASON, "team": team_id}
+    )
+
+    finished = [
+        g for g in games
+        if g.get("status", {}).get("long") == "Finished"
+    ]
+
+    finished = sorted(
+        finished,
+        key=lambda g: g["date"]["start"],
+        reverse=True
+    )
+
+    return finished[:5]
+
+# ============================================================
+# 🔑 STEP 2 — BOX SCORE STATS (PLAYERS ENDPOINT)
+# ============================================================
+
+@st.cache_data(ttl=1800)
+def get_boxscore_players(game_id):
     return api_get(
         "players",
         {"season": SEASON, "game": game_id}
@@ -175,30 +181,20 @@ def parse_minutes(v):
         return 0
 
 # ============================================================
-# UI CONTROLS
+# UI
 # ============================================================
 
-def dbg(show_debug, *args):
-    if show_debug:
-        st.write(*args)
-
-c1, c2, c3 = st.columns(3)
-with c1:
-    legs_n = st.slider("Ideal legs (2–5)", 2, 5, 3)
-with c2:
-    risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"])
-with c3:
-    show_debug = st.toggle("Show debug", False)
-
-allow_two_leg = st.checkbox("Allow 2-leg parlay (higher confidence)", False)
+legs_n = st.slider("Ideal legs (2–5)", 2, 5, 3)
+risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"])
+allow_two_leg = st.checkbox("Allow 2-leg parlay")
 
 teams = get_teams()
 lookup = {t["label"]: t for t in teams}
 
-a, _, b = st.columns([5, 1, 5])
-with a:
+c1, c2 = st.columns(2)
+with c1:
     team_a = lookup[st.selectbox("Team A", list(lookup.keys()))]
-with b:
+with c2:
     team_b = lookup[st.selectbox("Team B", list(lookup.keys()))]
 
 run_btn = st.button("Auto-build best SGP", type="primary")
@@ -213,31 +209,34 @@ if run_btn:
         min_legs = 2 if allow_two_leg else 3
 
         for team in (team_a, team_b):
-            games = get_games(team["team_id"])
-            dbg(show_debug, "DEBUG games count", team["code"], len(games))
+            games = get_last_5_completed_games(team["team_id"])
+            if len(games) < 5:
+                continue
 
             logs = {}
 
+            # ====================================================
+            # 🔑 STEP 3 — BUILD PLAYER LAST-5 GAME LOGS
+            # ====================================================
             for g in games:
-                stats = get_stats(g["id"])
-                dbg(show_debug, "DEBUG stats len", team["code"], g["id"], len(stats))
+                players = get_boxscore_players(g["id"])
 
-                for r in stats:
+                for r in players:
                     if r.get("team", {}).get("id") != team["team_id"]:
                         continue
 
-                    p = r.get("player", {})
                     stats_arr = r.get("statistics", [])
                     if not stats_arr:
                         continue
                     s = stats_arr[0]
 
+                    p = r.get("player", {})
                     pid = p.get("id")
                     if not pid:
                         continue
 
                     logs.setdefault(pid, {
-                        "name": p.get("name", "Unknown"),
+                        "name": p.get("name"),
                         "team": team["code"],
                         "games": []
                     })
@@ -247,9 +246,16 @@ if run_btn:
                         "pts": s.get("points", 0),
                         "reb": s.get("totReb", 0),
                         "ast": s.get("assists", 0),
-                        "pra": s.get("points", 0) + s.get("totReb", 0) + s.get("assists", 0)
+                        "pra": (
+                            s.get("points", 0)
+                            + s.get("totReb", 0)
+                            + s.get("assists", 0)
+                        )
                     })
 
+            # ====================================================
+            # MODEL FILTERING
+            # ====================================================
             for info in logs.values():
                 last5 = info["games"]
                 if len(last5) != 5:
@@ -282,14 +288,18 @@ if run_btn:
                         })
 
         candidates.sort(key=lambda x: (x["pref"], x["variance"]))
-        main_team = choose_main_team(eligible, team_a["code"], team_b["code"])
 
+        if not candidates:
+            st.warning(random.choice(NO_BET_MESSAGES))
+            st.stop()
+
+        main_team = choose_main_team(eligible, team_a["code"], team_b["code"])
         chosen = build_sgp_with_constraints(
             candidates,
             team_a["code"],
             team_b["code"],
             main_team,
-            mode_to_legs(risk_mode, legs_n)
+            legs_n
         )
 
         if len(chosen) < min_legs:
@@ -298,7 +308,7 @@ if run_btn:
 
         safe = make_safe(chosen)
 
-    st.success("✅ SGP built successfully")
+    st.success("✅ SGP built")
 
     st.subheader("🔥 Final Slip")
     for p in chosen:
