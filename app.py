@@ -162,7 +162,7 @@ def get_games(team_id):
 @st.cache_data(ttl=1800)
 def get_stats(game_id):
     return api_get(
-        "players/statistics",
+        "players",
         {"season": SEASON, "game": game_id}
     )
 
@@ -227,7 +227,11 @@ if run_btn:
                         continue
 
                     p = r.get("player", {})
-                    s = r.get("statistics", {})
+                    stats_arr = r.get("statistics", [])
+                    if not stats_arr:
+                        continue
+                    s = stats_arr[0]
+
                     pid = p.get("id")
                     if not pid:
                         continue
