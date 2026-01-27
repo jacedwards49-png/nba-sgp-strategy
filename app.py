@@ -41,6 +41,14 @@ NO_BET_MESSAGES = [
 ]
 
 # ============================================================
+# DEBUG HELPER
+# ============================================================
+
+def dbg(show_debug, *args):
+    if show_debug:
+        st.write(*args)
+
+# ============================================================
 # MODEL RULES (OPTION A — LOCKED)
 # ============================================================
 
@@ -138,7 +146,7 @@ def get_teams():
     ]
 
 # ============================================================
-# 🔑 STEP 1 — LAST 5 COMPLETED GAMES ONLY
+# STEP 1 — LAST 5 COMPLETED GAMES
 # ============================================================
 
 @st.cache_data(ttl=1800)
@@ -162,7 +170,7 @@ def get_last_5_completed_games(team_id):
     return finished[:5]
 
 # ============================================================
-# 🔑 STEP 2 — BOX SCORE STATS (PLAYERS ENDPOINT)
+# STEP 2 — BOX SCORE STATS
 # ============================================================
 
 @st.cache_data(ttl=1800)
@@ -181,12 +189,13 @@ def parse_minutes(v):
         return 0
 
 # ============================================================
-# UI
+# UI CONTROLS
 # ============================================================
 
 legs_n = st.slider("Ideal legs (2–5)", 2, 5, 3)
 risk_mode = st.selectbox("Mode", ["Safe", "Ideal", "Higher-risk"])
-allow_two_leg = st.checkbox("Allow 2-leg parlay")
+allow_two_leg = st.checkbox("Allow 2-leg parlay (higher confidence)")
+show_debug = st.toggle("Show debug", False)
 
 teams = get_teams()
 lookup = {t["label"]: t for t in teams}
@@ -210,16 +219,20 @@ if run_btn:
 
         for team in (team_a, team_b):
             games = get_last_5_completed_games(team["team_id"])
+
+            # DEBUG #1 — completed games
+            dbg(show_debug, "DEBUG completed games", team["code"], len(games))
+
             if len(games) < 5:
                 continue
 
             logs = {}
 
-            # ====================================================
-            # 🔑 STEP 3 — BUILD PLAYER LAST-5 GAME LOGS
-            # ====================================================
             for g in games:
                 players = get_boxscore_players(g["id"])
+
+                # DEBUG #2 — stats per game
+                dbg(show_debug, "DEBUG stats len", team["code"], g["id"], len(players))
 
                 for r in players:
                     if r.get("team", {}).get("id") != team["team_id"]:
@@ -253,9 +266,14 @@ if run_btn:
                         )
                     })
 
-            # ====================================================
-            # MODEL FILTERING
-            # ====================================================
+            # DEBUG #3 — logs integrity
+            sample = next(iter(logs.values()), None)
+            if sample:
+                dbg(show_debug, "DEBUG sample player", sample["name"])
+                dbg(show_debug, "DEBUG sample games count", len(sample["games"]))
+            else:
+                dbg(show_debug, f"DEBUG logs EMPTY for team {team['code']}")
+
             for info in logs.values():
                 last5 = info["games"]
                 if len(last5) != 5:
