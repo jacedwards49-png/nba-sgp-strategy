@@ -174,10 +174,13 @@ def get_last_5_completed_games(team_id):
 # ============================================================
 
 @st.cache_data(ttl=1800)
-def get_boxscore_players(game_id):
+def get_boxscore_players(game_id, team_id):
     return api_get(
-        "players",
-        {"game": game_id}
+        "players/statistics",
+        {
+            "game": game_id,
+            "team": team_id
+        }
     )
 
 def parse_minutes(v):
