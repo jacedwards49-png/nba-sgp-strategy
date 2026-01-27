@@ -1,6 +1,5 @@
 import random
 import requests
-import pandas as pd
 import streamlit as st
 from datetime import datetime
 
@@ -16,7 +15,7 @@ st.caption(
 )
 
 # ============================================================
-# API CONFIG
+# API CONFIG (Native API-Sports)
 # ============================================================
 
 API_KEY = st.secrets.get("API_SPORTS_KEY")
@@ -170,7 +169,7 @@ def get_last_5_completed_games(team_id):
     return finished[:5]
 
 # ============================================================
-# STEP 2 — BOX SCORE STATS
+# STEP 2 — BOX SCORE STATS (CANONICAL)
 # ============================================================
 
 @st.cache_data(ttl=1800)
@@ -183,7 +182,6 @@ def get_boxscore_players(game_id, team_id):
             "season": SEASON
         }
     )
-
 
 def parse_minutes(v):
     if not v:
@@ -233,6 +231,10 @@ if run_btn:
 
             logs = {}
 
+            # ====================================================
+            # CANONICAL LOOP (FIXED)
+            # ====================================================
+
             for g in games:
                 players = get_boxscore_players(g["id"], team["team_id"])
 
@@ -240,15 +242,9 @@ if run_btn:
                 dbg(show_debug, "DEBUG stats len", team["code"], g["id"], len(players))
 
                 for r in players:
-                    if r.get("team", {}).get("id") != team["team_id"]:
-                        continue
-
-                    stats_arr = r.get("statistics", [])
-                    if not stats_arr:
-                        continue
-                    s = stats_arr[0]
-
                     p = r.get("player", {})
+                    s = r.get("statistics", {})
+
                     pid = p.get("id")
                     if not pid:
                         continue
@@ -279,65 +275,5 @@ if run_btn:
             else:
                 dbg(show_debug, f"DEBUG logs EMPTY for team {team['code']}")
 
-            for info in logs.values():
-                last5 = info["games"]
-                if len(last5) != 5:
-                    continue
-
-                for stat in PREF_ORDER:
-                    vals = [g[stat.lower()] for g in last5]
-                    floor = int(min(vals) * 0.9)
-                    if floor <= 0:
-                        continue
-
-                    if minutes_gate(last5):
-                        eligible.append({"player": info["name"], "team": info["team"]})
-                        candidates.append({
-                            "player": info["name"],
-                            "team": info["team"],
-                            "stat": stat,
-                            "line": floor,
-                            "pref": PREF_ORDER.index(stat),
-                            "variance": VARIANCE_RANK[stat]
-                        })
-                    else:
-                        near_miss.append({
-                            "player": info["name"],
-                            "team": info["team"],
-                            "stat": stat,
-                            "line": floor,
-                            "variance": VARIANCE_RANK[stat],
-                            "score": near_miss_score(last5, stat, floor)
-                        })
-
-        candidates.sort(key=lambda x: (x["pref"], x["variance"]))
-
         if not candidates:
             st.warning(random.choice(NO_BET_MESSAGES))
-            st.stop()
-
-        main_team = choose_main_team(eligible, team_a["code"], team_b["code"])
-        chosen = build_sgp_with_constraints(
-            candidates,
-            team_a["code"],
-            team_b["code"],
-            main_team,
-            legs_n
-        )
-
-        if len(chosen) < min_legs:
-            st.warning(random.choice(NO_BET_MESSAGES))
-            st.stop()
-
-        safe = make_safe(chosen)
-
-    st.success("✅ SGP built")
-
-    st.subheader("🔥 Final Slip")
-    for p in chosen:
-        st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
-
-    if len(safe) < len(chosen):
-        st.subheader("🛡 SAFE Slip")
-        for p in safe:
-            st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
