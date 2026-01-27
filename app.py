@@ -210,12 +210,7 @@ if run_btn:
                         "games": []
                     })
 
-            
-            
-            for sample in logs.values():
-                    st.write("DEBUG sample player:", sample["name"])
-                    st.write("DEBUG games:", sample["games"])
-            break
+           
 
                     logs[pid]["games"].append({
                         "min": parse_minutes(s.get("minutes")),
