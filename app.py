@@ -251,6 +251,12 @@ if run_btn:
                             "variance": VARIANCE_RANK[stat]
                         })
                     else:
+                        st.write(
+                            "DEBUG FAILED MINUTES",
+                            info["name"],
+                            [g["min"] for g in last5]
+                        )
+                        
                         near_miss.append({
                             "player": info["name"],
                             "team": info["team"],
