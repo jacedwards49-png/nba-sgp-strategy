@@ -177,7 +177,7 @@ def get_last_5_completed_games(team_id):
 def get_boxscore_players(game_id):
     return api_get(
         "players",
-        {"season": SEASON, "game": game_id}
+        {"game": game_id}
     )
 
 def parse_minutes(v):
