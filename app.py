@@ -15,7 +15,7 @@ st.caption(
 )
 
 # ============================================================
-# API CONFIG (Native API-Sports)
+# API CONFIG (API-Sports – Native)
 # ============================================================
 
 API_KEY = st.secrets.get("API_SPORTS_KEY")
@@ -43,16 +43,24 @@ NO_BET_MESSAGES = [
 # DEBUG HELPER
 # ============================================================
 
-def dbg(show_debug, *args):
-    if show_debug:
+def dbg(show, *args):
+    if show:
         st.write(*args)
 
 # ============================================================
-# MODEL RULES (OPTION A — LOCKED)
+# MODEL RULES
 # ============================================================
 
 VARIANCE_RANK = {"REB": 1, "AST": 1, "PRA": 2, "PTS": 3}
 PREF_ORDER = ["REB", "AST", "PRA", "PTS"]
+
+# 🔒 CANONICAL STAT MAP (FIX)
+STAT_KEY_MAP = {
+    "PTS": "pts",
+    "REB": "reb",
+    "AST": "ast",
+    "PRA": "pra",
+}
 
 def minutes_gate(last5):
     mins = [g["min"] for g in last5]
@@ -64,7 +72,8 @@ def minutes_gate(last5):
     )
 
 def near_miss_score(last5, stat, floor):
-    vals = [g[stat.lower()] for g in last5]
+    key = STAT_KEY_MAP[stat]
+    vals = [g[key] for g in last5]
     score = 0
     if sum(v >= floor for v in vals) == 4:
         score += 1
@@ -148,18 +157,15 @@ def get_last_5_completed_games(team_id):
         "games",
         {"league": NBA_LEAGUE, "season": SEASON, "team": team_id}
     )
-
     finished = [
         g for g in games
         if g.get("status", {}).get("long") == "Finished"
     ]
-
     finished = sorted(
         finished,
         key=lambda g: g["date"]["start"],
         reverse=True
     )
-
     return finished[:5]
 
 @st.cache_data(ttl=1800)
@@ -210,7 +216,7 @@ run_btn = st.button("Auto-build best SGP", type="primary")
 
 if run_btn:
     with st.spinner("Crunching the numbers..."):
-        candidates, near_miss, eligible = [], [], []
+        candidates, near_miss = [], []
         fallback_used = False
         min_legs = 2 if allow_two_leg else 3
 
@@ -244,10 +250,14 @@ if run_btn:
 
                     logs[pid]["games"].append({
                         "min": parse_minutes(s.get("minutes")),
-                        "pts": s.get("points", 0),
-                        "reb": s.get("totReb", 0),
-                        "ast": s.get("assists", 0),
-                        "pra": s.get("points", 0) + s.get("totReb", 0) + s.get("assists", 0)
+                        "pts": int(s.get("points", 0)),
+                        "reb": int(s.get("totReb", 0)),
+                        "ast": int(s.get("assists", 0)),
+                        "pra": (
+                            int(s.get("points", 0)) +
+                            int(s.get("totReb", 0)) +
+                            int(s.get("assists", 0))
+                        )
                     })
 
             for info in logs.values():
@@ -256,23 +266,12 @@ if run_btn:
                     continue
 
                 for stat in PREF_ORDER:
-                    vals = [g[stat.lower()] for g in last5]
+                    key = STAT_KEY_MAP[stat]
+                    vals = [g[key] for g in last5]
                     floor = int(min(vals) * 0.9)
 
-                    # 🔎 DEBUG: inspect floor math
-                    dbg(
-                        show_debug,
-                        "DEBUG FLOOR",
-                        info["name"],
-                        stat,
-                        "vals:",
-                        vals,
-                        "min:",
-                        min(vals),
-                        "floor:",
-                        floor
-                    )
-                    
+                    dbg(show_debug, "DEBUG FLOOR", info["name"], stat, vals, "min", min(vals), "floor", floor)
+
                     if floor <= 0:
                         continue
 
@@ -295,7 +294,7 @@ if run_btn:
                         })
 
         # ====================================================
-        # FALLBACK PARLAY (MINUTES GATE REMOVED)
+        # FALLBACK
         # ====================================================
 
         if not candidates and allow_fallback and near_miss:
