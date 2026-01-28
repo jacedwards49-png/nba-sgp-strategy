@@ -15,14 +15,17 @@ st.caption(
 )
 
 # ============================================================
-# DEBUG COLLECTION (NEW)
+# DEBUG STATE (PERSISTENT)
 # ============================================================
 
-DEBUG_ROWS = []
+if "DEBUG_ROWS" not in st.session_state:
+    st.session_state.DEBUG_ROWS = []
 
 def dbg(show, *args):
     if show:
-        DEBUG_ROWS.append(" ".join(str(a) for a in args))
+        st.session_state.DEBUG_ROWS.append(
+            " ".join(str(a) for a in args)
+        )
 
 # ============================================================
 # API CONFIG
@@ -209,6 +212,9 @@ run_btn = st.button("Auto-build best SGP", type="primary")
 # ============================================================
 
 if run_btn:
+    # clear debug at start of run
+    st.session_state.DEBUG_ROWS = []
+
     with st.spinner("Crunching the numbers..."):
         candidates, near_miss = [], []
         fallback_used = False
@@ -248,7 +254,9 @@ if run_btn:
                         "pts": int(s.get("points", 0)),
                         "reb": int(s.get("totReb", 0)),
                         "ast": int(s.get("assists", 0)),
-                        "pra": int(s.get("points", 0)) + int(s.get("totReb", 0)) + int(s.get("assists", 0))
+                        "pra": int(s.get("points", 0)) +
+                               int(s.get("totReb", 0)) +
+                               int(s.get("assists", 0))
                     })
 
             for info in logs.values():
@@ -261,7 +269,17 @@ if run_btn:
                     vals = [g[key] for g in last5]
                     floor = int(min(vals) * 0.9)
 
-                    dbg(show_debug, "DEBUG FLOOR", info["name"], stat, vals, "min", min(vals), "floor", floor)
+                    dbg(
+                        show_debug,
+                        "DEBUG FLOOR",
+                        info["name"],
+                        stat,
+                        vals,
+                        "min",
+                        min(vals),
+                        "floor",
+                        floor
+                    )
 
                     if floor <= 0:
                         continue
@@ -285,7 +303,10 @@ if run_btn:
                         })
 
         if not candidates and allow_fallback and near_miss:
-            ranked = sorted(near_miss, key=lambda x: (x["score"], VARIANCE_RANK[x["stat"]]))
+            ranked = sorted(
+                near_miss,
+                key=lambda x: (x["score"], VARIANCE_RANK[x["stat"]])
+            )
             candidates = ranked[:legs_n]
             fallback_used = True
 
@@ -321,11 +342,11 @@ if run_btn:
             st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
 
 # ============================================================
-# DEBUG RENDER (NEW – GUARANTEED VISIBLE)
+# DEBUG OUTPUT (GUARANTEED VISIBLE)
 # ============================================================
 
-if show_debug and DEBUG_ROWS:
+if show_debug and st.session_state.DEBUG_ROWS:
     st.subheader("🪲 Debug Output")
     with st.expander("Click to expand debug logs", expanded=True):
-        for row in DEBUG_ROWS[:300]:
+        for row in st.session_state.DEBUG_ROWS[:300]:
             st.text(row)
