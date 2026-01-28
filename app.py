@@ -235,7 +235,11 @@ if run_btn:
 
                 for r in players:
                     p = r.get("player", {})
-                    s = r.get("statistics", {})
+                    stats_list = r.get("statistics", [])
+                    if not stats_list:
+                        continue
+                        
+                    s = stats_list[0]
                     pid = p.get("id")
                     if not pid:
                         continue
