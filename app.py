@@ -312,7 +312,9 @@ if run_btn:
 
         if not candidates:
             st.warning(random.choice(NO_BET_MESSAGES))
-            st.stop()
+            no_bet = True
+        else:
+            no_bet = False
 
         main_team = choose_main_team(candidates, team_a["code"], team_b["code"])
         chosen = build_sgp_with_constraints(
