@@ -15,7 +15,17 @@ st.caption(
 )
 
 # ============================================================
-# API CONFIG (API-Sports – Native)
+# DEBUG COLLECTION (NEW)
+# ============================================================
+
+DEBUG_ROWS = []
+
+def dbg(show, *args):
+    if show:
+        DEBUG_ROWS.append(" ".join(str(a) for a in args))
+
+# ============================================================
+# API CONFIG
 # ============================================================
 
 API_KEY = st.secrets.get("API_SPORTS_KEY")
@@ -40,21 +50,12 @@ NO_BET_MESSAGES = [
 ]
 
 # ============================================================
-# DEBUG HELPER
-# ============================================================
-
-def dbg(show, *args):
-    if show:
-        st.write(*args)
-
-# ============================================================
 # MODEL RULES
 # ============================================================
 
 VARIANCE_RANK = {"REB": 1, "AST": 1, "PRA": 2, "PTS": 3}
 PREF_ORDER = ["REB", "AST", "PRA", "PTS"]
 
-# 🔒 CANONICAL STAT MAP (FIX)
 STAT_KEY_MAP = {
     "PTS": "pts",
     "REB": "reb",
@@ -172,11 +173,7 @@ def get_last_5_completed_games(team_id):
 def get_boxscore_players(game_id, team_id):
     return api_get(
         "players/statistics",
-        {
-            "game": game_id,
-            "team": team_id,
-            "season": SEASON
-        }
+        {"game": game_id, "team": team_id, "season": SEASON}
     )
 
 def parse_minutes(v):
@@ -193,10 +190,7 @@ def parse_minutes(v):
 
 legs_n = st.slider("Ideal legs (2–5)", 2, 5, 3)
 allow_two_leg = st.checkbox("Allow 2-leg parlay (higher confidence)")
-allow_fallback = st.checkbox(
-    "Allow fallback parlay (minutes gate removed)",
-    help="If no clean SGP is found, build a fallback ignoring minutes gate."
-)
+allow_fallback = st.checkbox("Allow fallback parlay (minutes gate removed)")
 show_debug = st.toggle("Show debug", False)
 
 teams = get_teams()
@@ -224,9 +218,6 @@ if run_btn:
             games = get_last_5_completed_games(team["team_id"])
             dbg(show_debug, "DEBUG completed games", team["code"], len(games))
 
-            if len(games) < 5:
-                continue
-
             logs = {}
 
             for g in games:
@@ -238,7 +229,7 @@ if run_btn:
                     stats_list = r.get("statistics", [])
                     if not stats_list:
                         continue
-                        
+
                     s = stats_list[0]
                     pid = p.get("id")
                     if not pid:
@@ -257,11 +248,7 @@ if run_btn:
                         "pts": int(s.get("points", 0)),
                         "reb": int(s.get("totReb", 0)),
                         "ast": int(s.get("assists", 0)),
-                        "pra": (
-                            int(s.get("points", 0)) +
-                            int(s.get("totReb", 0)) +
-                            int(s.get("assists", 0))
-                        )
+                        "pra": int(s.get("points", 0)) + int(s.get("totReb", 0)) + int(s.get("assists", 0))
                     })
 
             for info in logs.values():
@@ -297,42 +284,10 @@ if run_btn:
                             "score": near_miss_score(last5, stat, floor)
                         })
 
-        # ====================================================
-        # FALLBACK
-        # ====================================================
-
         if not candidates and allow_fallback and near_miss:
-            ranked = sorted(
-                near_miss,
-                key=lambda x: (x["score"], VARIANCE_RANK[x["stat"]])
-            )
-
-            main_team = choose_main_team(ranked, team_a["code"], team_b["code"])
-            opp_team = team_b["code"] if main_team == team_a["code"] else team_a["code"]
-
-            used_opp = False
-            fallback_legs = []
-
-            for nm in ranked:
-                if len(fallback_legs) >= max(min_legs, legs_n):
-                    break
-
-                if nm["team"] == opp_team:
-                    if used_opp:
-                        continue
-                    used_opp = True
-
-                if any(
-                    x["player"] == nm["player"] and x["stat"] == nm["stat"]
-                    for x in fallback_legs
-                ):
-                    continue
-
-                fallback_legs.append(nm)
-
-            if len(fallback_legs) >= min_legs:
-                fallback_used = True
-                candidates = fallback_legs
+            ranked = sorted(near_miss, key=lambda x: (x["score"], VARIANCE_RANK[x["stat"]]))
+            candidates = ranked[:legs_n]
+            fallback_used = True
 
         if not candidates:
             st.warning(random.choice(NO_BET_MESSAGES))
@@ -364,3 +319,13 @@ if run_btn:
         st.subheader("🛡 SAFE Slip")
         for p in safe:
             st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
+
+# ============================================================
+# DEBUG RENDER (NEW – GUARANTEED VISIBLE)
+# ============================================================
+
+if show_debug and DEBUG_ROWS:
+    st.subheader("🪲 Debug Output")
+    with st.expander("Click to expand debug logs", expanded=True):
+        for row in DEBUG_ROWS[:300]:
+            st.text(row)
