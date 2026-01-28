@@ -258,6 +258,20 @@ if run_btn:
                                int(s.get("totReb", 0)) +
                                int(s.get("assists", 0))
                     })
+                    dbg(
+                        show_debug,
+                        "DEBUG PLAYER GAME",
+                        name,
+                        "MIN", parse_minutes(s.get("minutes")),
+                        "PTS", int(s.get("points", 0)),
+                        "REB", int(s.get("totReb", 0)),
+                        "AST", int(s.get("assists", 0)),
+                        "PRA",
+                        int(s.get("points", 0)) +
+                        int(s.get("totReb", 0)) +
+                        int(s.get("assists", 0))
+                    )
+
 
             for info in logs.values():
                 last5 = info["games"]
