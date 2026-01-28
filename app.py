@@ -258,6 +258,21 @@ if run_btn:
                 for stat in PREF_ORDER:
                     vals = [g[stat.lower()] for g in last5]
                     floor = int(min(vals) * 0.9)
+
+                    # 🔎 DEBUG: inspect floor math
+                    dbg(
+                        show_debug,
+                        "DEBUG FLOOR",
+                        info["name"],
+                        stat,
+                        "vals:",
+                        vals,
+                        "min:",
+                        min(vals),
+                        "floor:",
+                        floor
+                    )
+                    
                     if floor <= 0:
                         continue
 
