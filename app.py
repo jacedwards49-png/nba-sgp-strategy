@@ -23,13 +23,14 @@ debug_container = st.container()
 
 def dbg(show, *args):
     if show:
-        with debug_container:
-            st.text(" ".join(str(a) for a in args))
-
-if show_debug:
-    with debug_container:
         with st.expander("🪲 Debug Output", expanded=True):
-            pass
+            st.write(*args)
+
+            
+
+            
+
+
 
 # ============================================================
 # API CONFIG
