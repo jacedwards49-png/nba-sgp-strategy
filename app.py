@@ -15,17 +15,21 @@ st.caption(
 )
 
 # ============================================================
-# DEBUG STATE (PERSISTENT)
+# DEBUG (LIVE CONTAINER — FIXED)
 # ============================================================
 
-if "DEBUG_ROWS" not in st.session_state:
-    st.session_state.DEBUG_ROWS = []
+show_debug = st.toggle("Show debug", False)
+debug_container = st.container()
 
 def dbg(show, *args):
     if show:
-        st.session_state.DEBUG_ROWS.append(
-            " ".join(str(a) for a in args)
-        )
+        with debug_container:
+            st.text(" ".join(str(a) for a in args))
+
+if show_debug:
+    with debug_container:
+        with st.expander("🪲 Debug Output", expanded=True):
+            pass
 
 # ============================================================
 # API CONFIG
@@ -105,17 +109,13 @@ def build_sgp_with_constraints(cands, a, b, main_team, n_legs):
     for c in cands:
         if len(chosen) >= n_legs:
             break
-
         if c["team"] == opp:
             if used_opp:
                 continue
             used_opp = True
-
         if any(x["player"] == c["player"] and x["stat"] == c["stat"] for x in chosen):
             continue
-
         chosen.append(c)
-
     return chosen
 
 # ============================================================
@@ -194,7 +194,6 @@ def parse_minutes(v):
 legs_n = st.slider("Ideal legs (2–5)", 2, 5, 3)
 allow_two_leg = st.checkbox("Allow 2-leg parlay (higher confidence)")
 allow_fallback = st.checkbox("Allow fallback parlay (minutes gate removed)")
-show_debug = st.toggle("Show debug", False)
 
 teams = get_teams()
 lookup = {t["label"]: t for t in teams}
@@ -212,9 +211,6 @@ run_btn = st.button("Auto-build best SGP", type="primary")
 # ============================================================
 
 if run_btn:
-    # clear debug at start of run
-    st.session_state.DEBUG_ROWS = []
-
     with st.spinner("Crunching the numbers..."):
         candidates, near_miss = [], []
         fallback_used = False
@@ -222,13 +218,10 @@ if run_btn:
 
         for team in (team_a, team_b):
             games = get_last_5_completed_games(team["team_id"])
-            dbg(show_debug, "DEBUG completed games", team["code"], len(games))
-
             logs = {}
 
             for g in games:
                 players = get_boxscore_players(g["id"], team["team_id"])
-                dbg(show_debug, "DEBUG stats len", team["code"], g["id"], len(players))
 
                 for r in players:
                     p = r.get("player", {})
@@ -249,7 +242,7 @@ if run_btn:
                         "games": []
                     })
 
-                    logs[pid]["games"].append({
+                    game_row = {
                         "min": parse_minutes(s.get("minutes")),
                         "pts": int(s.get("points", 0)),
                         "reb": int(s.get("totReb", 0)),
@@ -257,21 +250,20 @@ if run_btn:
                         "pra": int(s.get("points", 0)) +
                                int(s.get("totReb", 0)) +
                                int(s.get("assists", 0))
-                    })
+                    }
+
+                    logs[pid]["games"].append(game_row)
+
                     dbg(
                         show_debug,
                         "DEBUG PLAYER GAME",
                         name,
-                        "MIN", parse_minutes(s.get("minutes")),
-                        "PTS", int(s.get("points", 0)),
-                        "REB", int(s.get("totReb", 0)),
-                        "AST", int(s.get("assists", 0)),
-                        "PRA",
-                        int(s.get("points", 0)) +
-                        int(s.get("totReb", 0)) +
-                        int(s.get("assists", 0))
+                        "MIN", game_row["min"],
+                        "PTS", game_row["pts"],
+                        "REB", game_row["reb"],
+                        "AST", game_row["ast"],
+                        "PRA", game_row["pra"]
                     )
-
 
             for info in logs.values():
                 last5 = info["games"]
@@ -289,10 +281,8 @@ if run_btn:
                         info["name"],
                         stat,
                         vals,
-                        "min",
-                        min(vals),
-                        "floor",
-                        floor
+                        "min", min(vals),
+                        "floor", floor
                     )
 
                     if floor <= 0:
@@ -326,9 +316,7 @@ if run_btn:
 
         if not candidates:
             st.warning(random.choice(NO_BET_MESSAGES))
-            no_bet = True
-        else:
-            no_bet = False
+            st.stop()
 
         main_team = choose_main_team(candidates, team_a["code"], team_b["code"])
         chosen = build_sgp_with_constraints(
@@ -341,10 +329,6 @@ if run_btn:
 
         safe = make_safe(chosen)
 
-    # ========================================================
-    # DISPLAY
-    # ========================================================
-
     if fallback_used:
         st.info("⚠️ Fallback parlay (minutes gate removed)")
 
@@ -356,13 +340,3 @@ if run_btn:
         st.subheader("🛡 SAFE Slip")
         for p in safe:
             st.write(f'• {p["player"]} {p["stat"]} ≥ {p["line"]} ({p["team"]})')
-
-# ============================================================
-# DEBUG OUTPUT (GUARANTEED VISIBLE)
-# ============================================================
-
-if show_debug and st.session_state.DEBUG_ROWS:
-    st.subheader("🪲 Debug Output")
-    with st.expander("Click to expand debug logs", expanded=True):
-        for row in st.session_state.DEBUG_ROWS[:300]:
-            st.text(row)
